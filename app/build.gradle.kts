@@ -7,6 +7,7 @@ dependencies {
     implementation(project(":bff-admin"))
     implementation(project(":module-identity"))
     implementation(project(":module-form-definition"))
+    implementation(project(":module-form-import"))
     implementation(project(":module-submission"))
     implementation(project(":module-discovery"))
     implementation(project(":module-processing"))

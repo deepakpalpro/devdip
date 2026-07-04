@@ -36,7 +36,8 @@ npm run dev:admin                        # http://localhost:5174
 | Layer | Technology |
 |-------|-----------|
 | Backend | Java 21, Spring Boot 3.x, Spring Web, Spring Data JPA/Hibernate, Bean Validation |
-| Migrations | Flyway (`V1`–`V9`) |
+| Form import (extraction) | Apache PDFBox (PDF), Apache POI (XLS/XLSX), jsoup (HTML), JDK `HttpClient` + Jackson (Ollama vision) |
+| Migrations | Flyway (`V1`–`V11`) |
 | Database | MySQL 8.x (prod), H2 in MySQL mode (local/tests) |
 | API docs | springdoc-openapi (grouped: consumer + admin) |
 | Frontend | React 18, TypeScript, Vite 6, React Router, TanStack Query |
@@ -54,15 +55,16 @@ banking-forms-platform/
 ├── bff-admin/                  # BFF-ADMIN    — admin REST API (/api/admin/v1)
 ├── module-identity/            # M-IDENTITY   — tenants, users, roles
 ├── module-form-definition/     # M-FORMDEF    — form templates, versions, schema composition
+├── module-form-import/         # M-FORMIMPORT — import a form from PDF/CSV/XLS/HTML/URL/image
 ├── module-submission/          # M-SUBMISSION — drafts, submissions, section storage, audit
 ├── module-discovery/           # M-DISCOVERY  — triage questionnaire + recommendations + prefill
 ├── module-pipeline/            # M-PIPELINE   — automated processing orchestration
 ├── module-transformation/      # M-TRANSFORM  — PII scrubbing
 ├── module-processing/          # M-PROCESSING — manual review state machine
 ├── module-observability/       # M-OBSERV     — metrics/tracing config
+├── module-service-integration/ # M-SVCINT     — external/AI provider adapters (Ollama vision form-import)
 ├── module-notification/        # (placeholder — Phase 3/4)
 ├── module-downstream/          # (placeholder — Phase 4)
-├── module-service-integration/ # (placeholder — Phase 4)
 ├── module-analytics/           # (placeholder — Phase 5)
 ├── docs/                       # documentation
 └── frontend/                   # FE — React monorepo (apps + packages)
@@ -235,8 +237,40 @@ Runs the automated post-submit pipeline and exposes a report for admins.
 ### 5.8 `M-OBSERV` — Observability (`module-observability`)
 - `ObservabilityConfig` — Micrometer/metrics wiring seed. Dashboards, tracing, alerting are Phase 5. *Implements:* `US-9.2` (partial).
 
-### 5.9 Placeholder modules
-`module-notification`, `module-downstream`, `module-service-integration`, `module-analytics` are scaffolded (build files only) for Phase 4/5 features (notifications, Kafka/S3/REST connectors, AI/service adapters, analytics export). *Maps to:* `US-8.x`, `US-9.x` (planned).
+---
+
+### 5.9 `M-FORMIMPORT` — Form Import (`module-form-import`)
+Turns an existing artifact (PDF / CSV / XLS(X) / HTML page / URL / image) into a draft form schema via a **pluggable, DB-configured extractor pipeline** with a **human-in-the-loop** review before anything becomes a form. This module owns the neutral SPI + the in-JVM extractors; AI/vision extractors live in `M-SVCINT` (§5.10) and plug into the same SPI.
+
+| Kind | Classes |
+|------|---------|
+| SPI (`spi/`) | `FormExtractor` (stable interface: `code()` + `extract(FormImportSource, ProviderConfig)`), `FormImportSource` (raw input: sourceType, content, url, fileName, contentType), `ProviderConfig` (typed accessors over the provider's `config_json`; `secret(key)` resolves env vars via `secretRef`), `SourceTypes` (canonical tokens: `PDF`/`CSV`/`SPREADSHEET`/`HTML`/`IMAGE`) |
+| Domain | `FormImportJob` (job + lifecycle, now carrying `sourceType`/`providerCode`), `FormImportStatus` (`PENDING → EXTRACTING → NEEDS_REVIEW → {ACCEPTED | FAILED}`), `FormImportProvider` (configurable provider row: `code`, `name`, `sourceType`, `enabled`, `priority`, `configJson`) |
+| Application | `FormImportService` (orchestrates create→extract→map→accept), `FormExtractorRouter` (DB-driven selection: highest-priority **enabled** provider for the source type **that has an available bean**), `SchemaMapper` (`ExtractedForm`→form JSON schema), `SourceTypeDetector` (file/MIME/URL→source token), `ProviderSettingsService` (list/update providers); neutral records `ExtractedForm`/`ExtractedField`/`FieldKind`, views `FormImportJobView`/`AcceptedFormView`/`ProviderView`, `MappedSchema`; exceptions `FormImportException`/`FormImportNotFoundException` |
+| Infra (in-JVM extractors) | `PdfBoxFormExtractor` (`pdfbox`: AcroForm fields + text-heuristic), `CsvFormExtractor` (`csv`: header row → fields), `SpreadsheetFormExtractor` (`poi-spreadsheet`: XLS/XLSX headers), `HtmlFormExtractor` (`jsoup-html`: `<form>` controls + labels, fetches URLs via `HttpClient`) |
+| Infra (repos) | `FormImportJobRepository`, `FormImportProviderRepository` |
+
+**How routing works** — extractors are just Spring beans implementing `FormExtractor` keyed by `code()`. The `form_import_provider` table (seeded in `V11`) declares which `code` handles which `sourceType`, whether it's `enabled`, and its `priority`. `FormExtractorRouter.resolve(sourceType)` picks the best enabled provider **whose bean exists** (`hasImplementation`), so a provider can be seeded/disabled without a matching bean (e.g. the generic `llm-vision` seam). This means new sources/providers are added by dropping in a bean + a provider row — no changes to the service or controllers.
+
+**Lifecycle & guardrails** — upload/URL creates a `PENDING` job (SHA-256 of the source for dedup), extraction runs and moves it to `NEEDS_REVIEW` with the mapped schema + a confidence signal (or `FAILED` with details); an admin reviews, edits, and **accepts** it, which creates a `DRAFT` form via `M-FORMDEF`. Nothing is published automatically — extraction output is always a proposal.
+
+*Implements:* `US-10.1`–`US-10.4`.
+
+---
+
+### 5.10 `M-SVCINT` — Service Integration / AI Providers (`module-service-integration`)
+Hosts external/AI implementations of the `M-FORMIMPORT` SPI (and, later, the pipeline `AI_EVALUATE` adapter). Depends on `module-form-import` for the SPI only.
+
+| Kind | Classes |
+|------|---------|
+| Form-import providers | `OllamaVisionFormExtractor` (`ollama-vision`: base64-encodes the image, downscales to `maxImageDimension`, calls a local **Ollama** `/api/generate` with a JSON-schema prompt using a vision model such as `llava`, parses the response into `ExtractedForm`; endpoint/model/prompt/timeout configurable via `config_json`), `LlmVisionFormExtractor` (`llm-vision`: generic hosted-LLM seam — disabled by default, throws until wired to a real provider) |
+
+**Ollama runtime** — a local Ollama daemon (run via Docker: `ollama/ollama` on `localhost:11434`, model `llava` pulled once) does on-device vision inference; no data leaves the host. `config_json` for the `ollama-vision` provider holds `endpoint`, `model`, `prompt`, `timeoutSeconds`, `maxImageDimension`; the provider is **disabled by default** (in-JVM parsers are the zero-setup path) and enabled from the admin Settings page once Ollama is running.
+
+*Implements:* `US-10.3` (image/vision source). *(AI evaluation step → `US-8.3`, planned.)*
+
+### 5.11 Placeholder modules
+`module-notification`, `module-downstream`, `module-analytics` are scaffolded (build files only) for Phase 4/5 features (notifications, Kafka/S3/REST connectors, analytics export). *Maps to:* `US-8.x`, `US-9.x` (planned).
 
 ---
 
@@ -262,9 +296,11 @@ Submit runs the pipeline synchronously and returns `202 Accepted` with the resul
 | `AdminSubmissionsController` | `GET /submissions`, `GET /submissions/{id}` (detail + timeline) |
 | `AdminReviewController` | `POST /submissions/{id}/review/{start|approve|reject|request-info}` |
 | `AdminPipelineController` | `GET /submissions/{id}/pipeline` (execution + sanitized payload) |
+| `AdminFormImportController` | `POST /form-imports` (upload file), `POST /form-imports/from-url` (fetch a URL), `GET /form-imports`, `GET /form-imports/{id}`, `POST /form-imports/{id}/accept` |
+| `AdminFormImportProviderController` | `GET /form-import-providers`, `PUT /form-import-providers/{code}` (enable/disable, priority, `config`) |
 | `AdminRequestContext` | resolves admin actor id |
 
-*Implements:* `US-2.x`, `US-7.x`.
+*Implements:* `US-2.x`, `US-7.x`, `US-10.x`.
 
 ---
 
@@ -283,6 +319,8 @@ Flyway migrations in `app/src/main/resources/db/migration/`:
 | `V7` | Sample submissions across all 8 statuses |
 | `V8` | More sample submissions + a FAILED-pipeline example |
 | `V9` | Draft resume progress: `current_section_key` on `submission` |
+| `V10` | `form_import_job` (form import lifecycle; `source_type`, `provider_code`, source hash, extracted/mapped JSON, status) |
+| `V11` | `form_import_provider` (configurable extractor registry) + seed: `pdfbox`, `csv`, `poi-spreadsheet`, `jsoup-html` (enabled); `ollama-vision`, `llm-vision` (disabled) |
 
 **Central tables:** `form_definition` → `form_version` (1:N, unique per version number). `submission` → `submission_section` → `submission_field_value`. `submission` → `submission_event` (append-only audit). `submission` → `pipeline_execution` + `submission_sanitized_payload`. IDs are `BINARY(16)` UUIDs. Detailed column-level design lives in [`ARCHITECTURE.md` §5](ARCHITECTURE.md).
 
@@ -348,6 +386,8 @@ Shared presentational components (`AppShell` with nav slot, `PageHeader`, `Butto
 | Forms list | `pages/FormsListPage.tsx`, `hooks/useAdminForms.ts` | List forms, create new, latest version/status |
 | Builder | `pages/FormBuilderPage.tsx`, `pages/formStatus.ts` | Version selector + JSON schema editor + save draft/publish/new version |
 | Submissions | `pages/SubmissionsListPage.tsx`, `pages/SubmissionDetailPage.tsx`, `hooks/useAdminSubmissions.ts` | Queue, detail (sections + timeline), review actions, pipeline report |
+| Import | `pages/FormImportPage.tsx`, `hooks/useFormImport.ts` | Import a form from a **file or URL** (mode toggle); shows detected `sourceType` + `providerCode`, extraction status/confidence, then review → accept (creates draft) |
+| Import settings | `pages/ImportProvidersPage.tsx` | List/configure extractor providers: enable/disable, priority, edit `config` JSON; shows whether an implementation bean is available |
 
 The visual drag-and-drop builder (`FE-PKG-BUILDER`) is currently a placeholder; the JSON editor is the working authoring UI. *Implements:* `US-2.x`, `US-7.x`. *(Visual builder → `US-2.5`, planned.)*
 
@@ -380,6 +420,7 @@ The visual drag-and-drop builder (`FE-PKG-BUILDER`) is currently a placeholder; 
 - **Add a form field type:** extend `SectionRenderer` (control) + `SectionValidator` (validation rules) + schema-shape validation in `FormCommandService.validateSchema`.
 - **Add a pipeline step:** add a `PipelineStepType`, implement the step in `SubmissionPipelineService` (or the config-driven `PipelineOrchestrator`), emit an audit event.
 - **Add a downstream connector:** implement in `module-downstream` behind a connector interface (see `ARCHITECTURE.md` §12) and invoke from the DOWNSTREAM step.
+- **Add a form-import source/provider:** implement `FormExtractor` (return a unique `code()`), register a `form_import_provider` row (source type + priority + `config_json`) via a new Flyway migration or the Settings page; the router picks it up with no service/controller changes. In-JVM parsers go in `M-FORMIMPORT`; external/AI providers go in `M-SVCINT`.
 - **Add an endpoint:** add controller method in the relevant BFF + api-client method + hook + page.
 
 ---
@@ -393,6 +434,8 @@ The visual drag-and-drop builder (`FE-PKG-BUILDER`) is currently a placeholder; 
 | BFF-ADMIN | Admin API | `bff-admin/` |
 | M-IDENTITY | Tenants/users | `module-identity/` |
 | M-FORMDEF | Form definition/versions | `module-form-definition/` |
+| M-FORMIMPORT | Form import (multi-source, SPI + in-JVM extractors) | `module-form-import/` |
+| M-SVCINT | External/AI provider adapters (Ollama vision) | `module-service-integration/` |
 | M-SUBMISSION | Submissions/storage/audit | `module-submission/` |
 | M-DISCOVERY | Triage/recommendation | `module-discovery/` |
 | M-PIPELINE | Automated pipeline | `module-pipeline/` |

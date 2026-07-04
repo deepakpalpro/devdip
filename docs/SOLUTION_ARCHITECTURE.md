@@ -91,13 +91,15 @@ Bounded contexts (modules), each layered `domain → application → infrastruct
 |--------|-----------------|---------------------|
 | `module-identity` | Identity | Tenants, users, roles |
 | `module-form-definition` | Form Authoring | Templates, versioning, schema composition |
+| `module-form-import` | Form Import | Multi-source (PDF/CSV/XLS/HTML/URL/image) → draft form via pluggable, DB-configured extractors + human review |
+| `module-service-integration` | External/AI Adapters | Ollama vision form-import provider (+ future AI-evaluate adapter) |
 | `module-submission` | Submissions | Drafts, dual-strategy storage, validation, audit |
 | `module-discovery` | Discovery | Triage rules, recommendation, prefill |
 | `module-pipeline` | Processing | Orchestrate validate/scrub/downstream |
 | `module-transformation` | Data Protection | PII scrubbing/tokenization |
 | `module-processing` | Case Review | Manual review state machine |
 | `module-observability` | Ops | Metrics/tracing |
-| `module-notification / -downstream / -service-integration / -analytics` | (planned) | Notifications, connectors, AI/service adapters, analytics |
+| `module-notification / -downstream / -analytics` | (planned) | Notifications, connectors, analytics |
 
 Detailed class-level breakdown: see [`TECHNICAL_GUIDE.md` §5–9](TECHNICAL_GUIDE.md).
 
@@ -113,6 +115,8 @@ Detailed class-level breakdown: see [`TECHNICAL_GUIDE.md` §5–9](TECHNICAL_GUI
 6. **Explicit state machines** — submission lifecycle and review workflow are guarded transitions with an append-only audit trail.
 7. **Fail-safe pipeline** — pipeline failures never fail the user's submit; they revert to `SUBMITTED` and are recorded for retry/review.
 8. **Idempotency** — submit accepts an `Idempotency-Key`; unique per tenant.
+9. **Pluggable, data-driven providers** — form extraction is a stable SPI (`FormExtractor`) selected from a DB registry (`form_import_provider`) by source type + priority; providers (incl. AI/vision) are added as beans + config rows, never by editing core logic.
+10. **Human-in-the-loop AI** — extraction (incl. AI/vision) always produces a *proposal* that an admin reviews/edits/accepts before a draft form is created; nothing auto-publishes.
 
 ---
 
@@ -128,6 +132,9 @@ Detailed class-level breakdown: see [`TECHNICAL_GUIDE.md` §5–9](TECHNICAL_GUI
 | ADR-6 | UUID `BINARY(16)` keys | Tenant-safe, non-guessable, merge-friendly | Slightly less human-readable |
 | ADR-7 | Dev headers (`X-Tenant-Id`/`X-Dev-User-Id`) pending OIDC | Unblock development | Must be replaced by OIDC before production (`SecurityConfig` ready) |
 | ADR-8 | springdoc grouped OpenAPI | Self-documenting consumer/admin APIs | Keep annotations current |
+| ADR-9 | Configurable, DB-driven form-import providers (SPI + `form_import_provider` registry) instead of hard-coded source enums | Add sources/providers (PDF/CSV/XLS/HTML/image/AI) without code changes; per-tenant/ops tuning via priority + `config_json` | Router/registry indirection; must guard "seeded but no bean available" |
+| ADR-10 | Local Ollama vision (`llava`) for the image source; in-JVM parsers default; hosted-LLM seam disabled by default | On-device inference (no data egress), zero-setup default path, pluggable to hosted LLMs later | Ollama is an external runtime (Docker), CPU inference is slow; image downscale + generous timeouts needed |
+| ADR-11 | Extraction output is a reviewed proposal, never auto-published | Safety/quality gate for AI-generated schemas; auditable | Extra admin step before a form goes live |
 
 ---
 
@@ -136,7 +143,8 @@ Detailed class-level breakdown: see [`TECHNICAL_GUIDE.md` §5–9](TECHNICAL_GUI
 - **Multi-tenancy:** shared-schema, tenant-scoped rows (`tenant_id` on all business tables); every query/service is tenant-filtered. (Row-level isolation; DB-per-tenant is a future option.)
 - **Form model:** `form_definition` 1:N `form_version` (`DRAFT`/`PUBLISHED`/`DEPRECATED`); publishing auto-deprecates the prior published version.
 - **Submission model:** `submission` → `submission_section` → `submission_field_value` (KEY_VALUE) or JSON blob (JSON_BLOB); `submission_event` append-only audit; `pipeline_execution` + `submission_sanitized_payload` for processing.
-- **Migrations:** Flyway `V1`–`V9` (schema + seed + sample data + draft resume progress). See [`ARCHITECTURE.md` §5](ARCHITECTURE.md) and [`TECHNICAL_GUIDE.md` §7](TECHNICAL_GUIDE.md).
+- **Form-import model:** `form_import_job` (source type, provider code, source hash for dedup, extracted/mapped JSON, lifecycle status) + `form_import_provider` (configurable extractor registry: code, source type, enabled, priority, `config_json`).
+- **Migrations:** Flyway `V1`–`V11` (schema + seed + sample data + draft resume progress + form-import job/provider). See [`ARCHITECTURE.md` §5](ARCHITECTURE.md) and [`TECHNICAL_GUIDE.md` §7](TECHNICAL_GUIDE.md).
 - **Encryption:** field-level encryption is enabled by the KEY_VALUE path (`is_encrypted` per field) + PII registry; at-rest DB encryption is a deployment concern.
 
 ---
@@ -146,8 +154,10 @@ Detailed class-level breakdown: see [`TECHNICAL_GUIDE.md` §5–9](TECHNICAL_GUI
 | Integration | Status | Approach |
 |-------------|--------|----------|
 | Identity (OIDC) | Planned | `SecurityConfig` = OAuth2 resource server (JWT); replace dev headers |
+| Form import — in-JVM extractors (PDF/CSV/XLS/HTML/URL) | ✅ Implemented | `FormExtractor` SPI beans in `module-form-import` (PDFBox/POI/jsoup), selected via `form_import_provider` registry |
+| Form import — AI/vision (image) | 🟡 Local (Ollama) | `OllamaVisionFormExtractor` in `module-service-integration` calls local Ollama (`llava`); hosted-LLM seam (`llm-vision`) disabled pending provider |
 | Downstream (core banking / Kafka / S3 / REST) | Planned | Connector interface in `module-downstream`, invoked by pipeline DOWNSTREAM step; `outbox_event` table for reliable async |
-| AI evaluator | Planned | Adapter interface (`module-service-integration`), pipeline `AI_EVALUATE` step |
+| AI evaluator (pipeline) | Planned | Adapter interface (`module-service-integration`), pipeline `AI_EVALUATE` step |
 | Notifications | Planned | `module-notification`, triggered by events |
 | Analytics | Planned | `module-analytics` export from sanitized payloads |
 
@@ -213,6 +223,7 @@ graph TB
 | Discovery/triage + prefill | ✅ Implemented |
 | Automated pipeline (validate → PII scrub → downstream) | ✅ Implemented (downstream = placeholder dispatch) |
 | Manual review workflow + audit timeline + pipeline report | ✅ Implemented |
+| Form import (multi-source, configurable providers, human-in-the-loop) | ✅ Implemented (PDF/CSV/XLS/HTML/URL in-JVM; image via local Ollama vision) |
 | OIDC auth | ⏳ Planned |
 | Real downstream connectors / eventing (outbox→broker) | ⏳ Planned |
 | AI evaluator, service-integration adapters | ⏳ Planned |

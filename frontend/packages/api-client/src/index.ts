@@ -65,6 +65,57 @@ export interface CreateFormRequest {
   storageStrategy?: 'JSON_BLOB' | 'KEY_VALUE';
 }
 
+export interface ImportConfidence {
+  overall: number;
+  source: string;
+  fields: Record<string, Record<string, number>>;
+}
+
+export interface FormImportJob {
+  id: string;
+  status: 'PENDING' | 'EXTRACTING' | 'NEEDS_REVIEW' | 'ACCEPTED' | 'FAILED' | string;
+  sourceType: string | null;
+  providerCode: string | null;
+  fileName: string | null;
+  source: string | null;
+  suggestedName: string | null;
+  proposedSchema: FormSchema | null;
+  confidence: ImportConfidence | null;
+  error: string | null;
+  formId: string | null;
+  createdAt: string;
+}
+
+export interface ImportProvider {
+  code: string;
+  name: string;
+  sourceType: string;
+  enabled: boolean;
+  priority: number;
+  available: boolean;
+  config: Record<string, unknown> | null;
+}
+
+export interface UpdateImportProviderRequest {
+  enabled: boolean;
+  priority: number;
+  config?: Record<string, unknown> | null;
+}
+
+export interface AcceptedForm {
+  jobId: string;
+  formId: string;
+  versionId: string;
+}
+
+export interface AcceptImportRequest {
+  code: string;
+  name: string;
+  category?: string | null;
+  storageStrategy?: 'JSON_BLOB' | 'KEY_VALUE';
+  schema?: FormSchema | null;
+}
+
 export interface FormDetail extends FormSummary {
   formVersionId: string;
   schema: FormSchema;
@@ -240,6 +291,35 @@ export function createApiClient(config: ApiClientConfig = {}) {
     publishAdminFormVersion: (formId: string, versionId: string) =>
       request<AdminFormVersion>(`/api/admin/v1/forms/${formId}/versions/${versionId}/publish`, config, {
         method: 'POST',
+      }),
+    uploadFormImport: (file: File) => {
+      const body = new FormData();
+      body.append('file', file);
+      // No Content-Type header — the browser sets the multipart boundary.
+      return request<FormImportJob>('/api/admin/v1/form-imports', config, { method: 'POST', body });
+    },
+    importFormFromUrl: (url: string) =>
+      request<FormImportJob>('/api/admin/v1/form-imports/from-url', config, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      }),
+    listFormImports: () => request<FormImportJob[]>('/api/admin/v1/form-imports', config),
+    getFormImport: (jobId: string) =>
+      request<FormImportJob>(`/api/admin/v1/form-imports/${jobId}`, config),
+    acceptFormImport: (jobId: string, body: AcceptImportRequest) =>
+      request<AcceptedForm>(`/api/admin/v1/form-imports/${jobId}/accept`, config, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    listImportProviders: () =>
+      request<ImportProvider[]>('/api/admin/v1/form-import-providers', config),
+    updateImportProvider: (code: string, body: UpdateImportProviderRequest) =>
+      request<ImportProvider>(`/api/admin/v1/form-import-providers/${encodeURIComponent(code)}`, config, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       }),
     listAdminSubmissions: () =>
       request<AdminSubmissionSummary[]>('/api/admin/v1/submissions', config),

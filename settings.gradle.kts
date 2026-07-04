@@ -6,6 +6,7 @@ include(
     "bff-admin",
     "module-identity",
     "module-form-definition",
+    "module-form-import",
     "module-submission",
     "module-discovery",
     "module-processing",

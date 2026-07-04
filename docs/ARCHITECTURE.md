@@ -761,6 +761,81 @@ GET /submissions/{id}
 
 ---
 
+### 5.10 Form Import (Multi-Source, Configurable Providers, Human-in-the-Loop)
+
+Authoring a form by hand is slow when the bank already has the form as a PDF, spreadsheet, web page, or scanned image. The **Form Import** pipeline (`module-form-import`) ingests such an artifact, extracts a candidate schema, and hands it to an admin to review and accept — at which point a normal `DRAFT` form is created in `module-form-definition`. **Extraction output is always a proposal; nothing is published automatically.**
+
+**Design goals**
+- Support many source types (PDF, CSV, XLS/XLSX, HTML, URL, image) behind one stable contract.
+- Let ops add/replace/tune extractors — including AI/vision — **without code changes**, driven by database configuration.
+- Keep AI *assistive*: a human reviews and edits before anything becomes a form.
+
+**Provider SPI (`spi/`).** Extraction is a single interface so every source type is handled uniformly:
+
+```java
+public interface FormExtractor {
+    String code();                                             // stable provider id, e.g. "pdfbox", "ollama-vision"
+    ExtractedForm extract(FormImportSource source, ProviderConfig config);
+}
+```
+- `FormImportSource` — neutral input (`sourceType`, `content` bytes, `url`, `fileName`, `contentType`).
+- `ProviderConfig` — typed accessors over the provider's `config_json`; `secret(key)` resolves secrets from environment variables via a `secretRef` (so API keys are never stored in the DB).
+- `SourceTypes` — canonical tokens (`PDF`, `CSV`, `SPREADSHEET`, `HTML`, `IMAGE`).
+- `ExtractedForm` / `ExtractedField` / `FieldKind` — neutral extraction result, independent of any provider or the form-definition schema.
+
+**Configurable provider registry.** The `form_import_provider` table (migration `V11`) is the source of truth for *which extractor handles what*:
+
+| Column | Meaning |
+|--------|---------|
+| `code` | matches a `FormExtractor.code()` bean |
+| `source_type` | which `SourceTypes` token this provider serves |
+| `enabled` | on/off without redeploy |
+| `priority` | lower wins when several providers serve one source type |
+| `config_json` | provider-specific config (endpoint, model, prompt, timeouts, `secretRef`, …) |
+
+Seeded providers: `pdfbox`, `csv`, `poi-spreadsheet`, `jsoup-html` (enabled); `ollama-vision`, `llm-vision` (disabled by default). Admins manage all of this from the **Settings → Import Providers** page (`GET/PUT /api/admin/v1/form-import-providers`).
+
+**Routing.** `FormExtractorRouter.resolve(sourceType)` reads the registry, orders enabled providers for that source type by `priority`, and returns the first one **whose implementation bean actually exists** (`hasImplementation(code)`). This decouples *configuration* from *availability*: a provider can be seeded/enabled in the DB even if its bean isn't deployed (e.g. the hosted-LLM `llm-vision` seam), and the router simply skips it. Adding a new source/provider = drop in a `FormExtractor` bean + a `form_import_provider` row; the service and controllers are untouched.
+
+**In-JVM extractors (`module-form-import/infrastructure`)** — zero external dependencies, the default path:
+- `PdfBoxFormExtractor` (`pdfbox`) — Apache PDFBox; reads AcroForm fields, falls back to a text/label heuristic.
+- `CsvFormExtractor` (`csv`) — header row → fields.
+- `SpreadsheetFormExtractor` (`poi-spreadsheet`) — Apache POI; header row of XLS/XLSX.
+- `HtmlFormExtractor` (`jsoup-html`) — jsoup parses `<form>` controls + `<label>`s (radios expand to option values); fetches remote pages via JDK `HttpClient` for the URL source.
+
+**AI/vision extractors (`module-service-integration`)** — external implementations of the same SPI (this module depends on `module-form-import` for the SPI only):
+- `OllamaVisionFormExtractor` (`ollama-vision`) — base64-encodes the image, downscales it to `maxImageDimension`, and calls a **local Ollama** `/api/generate` (default model `llava`) with a prompt that requests a strict JSON schema; parses the reply into `ExtractedForm`. Inference is on-device (no data egress). Config (`endpoint`, `model`, `prompt`, `timeoutSeconds`, `maxImageDimension`) lives in `config_json`.
+- `LlmVisionFormExtractor` (`llm-vision`) — generic hosted-LLM seam, disabled by default; throws until wired to a concrete provider (uses `secretRef` for the API key).
+
+**Lifecycle (`FormImportStatus`).**
+
+```
+POST /form-imports (file)  |  POST /form-imports/from-url (url)
+   │  detect sourceType (filename/MIME/URL) → create job (SHA-256 hash for dedup)
+   ▼  PENDING
+   │  FormImportService: router.resolve(sourceType) → extractor.extract(...) → SchemaMapper
+   ▼  EXTRACTING → NEEDS_REVIEW   (mapped form schema + confidence signal + sourceType/providerCode)
+   │
+   │  admin reviews / edits in the Import page
+   └── POST /form-imports/{id}/accept → create DRAFT form (module-form-definition) → ACCEPTED
+   (extraction error → FAILED, with details)
+```
+
+**Module boundaries & data.**
+- `module-form-import` owns the SPI, the in-JVM extractors, `FormImportService`, `FormExtractorRouter`, `SchemaMapper`, `SourceTypeDetector`, `ProviderSettingsService`, and the `form_import_job` + `form_import_provider` tables (migrations `V10`/`V11`).
+- `module-service-integration` hosts the AI/vision providers and depends only on the SPI.
+- `bff-admin` exposes `AdminFormImportController` (`/form-imports…`: upload, from-url, list, get, accept) and `AdminFormImportProviderController` (`/form-import-providers`).
+- Accept delegates to `FormCommandService` — imported forms enter the *same* draft→publish authoring flow as hand-built forms.
+
+**Trade-offs / boundaries.**
+- Extraction quality varies by source and (for vision) by model; the mandatory human review step is the quality gate.
+- Local Ollama is an external runtime (run via Docker) and CPU inference of `llava` is slow — hence image downscaling and generous, configurable timeouts; the in-JVM parsers remain the zero-setup default.
+- Secrets for hosted providers are resolved from the environment via `secretRef`, never persisted in `config_json`.
+
+*(This realizes the adapter-registry / configuration-model pattern sketched in §11 for the form-import use case.)*
+
+---
+
 ## 6. API Specifications (RESTful)
 
 Base URLs:

@@ -48,6 +48,7 @@
 | E7 | Admin Review & Operations | Queue, review, audit, pipeline report | M4 | ✅ |
 | E8 | Advanced Integrations | Connectors, eventing, AI, notifications | M5 | ⏳ |
 | E9 | Security & Observability Hardening | OIDC, dashboards, testing, analytics | M5/M6 | ⏳ |
+| E10 | Form Import (AI-assisted) | Import a form from PDF/CSV/XLS/HTML/URL/image via configurable extractors + human review | M4.5 (Phase 3) | ✅ (🟡 hosted-LLM seam) |
 
 ---
 
@@ -217,6 +218,30 @@
 - **US-8.4 — Service-integration adapters** ⏳ · `module-service-integration` — external API adapter registry.
 - **US-8.5 — Notifications** ⏳ · `module-notification` — event-triggered customer/staff notifications.
 
+### E10 — Form Import (AI-assisted) (Phase 3) ✅
+
+**US-10.1 — Import a form from a document** · ✅ · `M-FORMIMPORT`, `BFF-ADMIN`, `FE-ADMIN`
+> As a *form author*, I want to upload a PDF/CSV/XLS/HTML file (or point at a URL) so that a draft form is generated for me instead of building it by hand.
+- **AC1** `POST /form-imports` (file) / `POST /form-imports/from-url` (URL) creates a job; the source type is auto-detected (filename/MIME/URL).
+- **AC2** The right extractor runs (PDFBox/POI/jsoup) and the job reaches `NEEDS_REVIEW` with a mapped schema + confidence signal.
+- **AC3** Duplicate sources are de-duplicated via a source hash.
+
+**US-10.2 — Configurable extraction providers** · ✅ · `M-FORMIMPORT`, `BFF-ADMIN`, `FE-ADMIN`
+> As a *platform admin*, I want to manage which extractor handles each source type so that I can tune/extend extraction without a code change.
+- **AC1** `GET/PUT /form-import-providers` lists providers and updates `enabled`, `priority`, and `config` JSON (Settings page).
+- **AC2** For a source type, the highest-priority **enabled** provider **with an available implementation** is chosen; a provider can be seeded but disabled/unavailable.
+
+**US-10.3 — Import from an image (AI/vision)** · ✅ (🟡 hosted-LLM seam) · `M-SVCINT`, `M-FORMIMPORT`
+> As a *form author*, I want to import a form from a scanned image so that even non-digital forms can be onboarded.
+- **AC1** `ollama-vision` provider sends the (downscaled) image to a local Ollama vision model (`llava`) and returns fields for review.
+- **AC2** Provider is disabled by default and enabled from Settings once Ollama is running; endpoint/model/prompt/timeout are configurable.
+- *(Hosted-LLM `llm-vision` seam exists but is disabled pending a real provider.)*
+
+**US-10.4 — Review & accept an import (human-in-the-loop)** · ✅ · `M-FORMIMPORT`, `M-FORMDEF`, `FE-ADMIN`
+> As a *form author*, I want to review/edit the extracted schema before it becomes a form so that AI output is never trusted blindly.
+- **AC1** Job lands in `NEEDS_REVIEW` (or `FAILED`); `POST /form-imports/{id}/accept` creates a `DRAFT` form (via `M-FORMDEF`) with the reviewed schema.
+- **AC2** Nothing is published automatically — accept only produces a draft for normal authoring/publish.
+
 ### E9 — Security & Observability Hardening (M5/M6) ⏳
 
 - **US-9.1 — OIDC authentication & RBAC** ⏳ · `APP-CORE` (`SecurityConfig`), `M-IDENTITY` — replace dev headers with JWT/OIDC + role enforcement.
@@ -271,6 +296,10 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | US-9.2 | Observability | M-OBSERV | 🟡 | S8 |
 | US-9.3 | Load & security testing | (cross-cutting) | ⏳ | S8 |
 | US-9.4 | Analytics export | module-analytics | ⏳ | S8 |
+| US-10.1 | Import form from document | M-FORMIMPORT, BFF-ADMIN, FE-ADMIN | ✅ | S6.5 |
+| US-10.2 | Configurable extraction providers | M-FORMIMPORT, BFF-ADMIN, FE-ADMIN | ✅ | S6.5 |
+| US-10.3 | Import from image (AI/vision) | M-SVCINT, M-FORMIMPORT | ✅ / 🟡 | S6.5 |
+| US-10.4 | Review & accept import | M-FORMIMPORT, M-FORMDEF, FE-ADMIN | ✅ | S6.5 |
 
 ---
 
@@ -284,6 +313,7 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | **S4** | Consumer application lifecycle | US-5.1 … US-5.3 | M3 | ✅ Done |
 | **S5** | Automated processing pipeline + PII | US-6.1 … US-6.3 | M4 | ✅ Done |
 | **S6** | Admin review workspace + pipeline report | US-7.1 … US-7.4 | M4 | ✅ Done |
+| **S6.5** | Form import (multi-source, configurable providers, Ollama vision) — Phase 3 | US-10.1 … US-10.4 | M4.5 | ✅ Done |
 | **S7** | OIDC auth + real downstream + eventing | US-9.1, US-8.1, US-8.2 | M5 | ⏳ Planned |
 | **S8** | AI, notifications, analytics, observability, hardening + visual builder | US-8.3–8.5, US-9.2–9.4, US-2.5 | M5/M6 | ⏳ Planned |
 
@@ -297,10 +327,11 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | **M2** | Authoring & Filling | E2, E4 | Author→publish→fill→submit works end-to-end | ✅ |
 | **M3** | Consumer Experience | E3, E5 | Discovery + resumable drafts + status tracking | ✅ |
 | **M4** | Processing & Review | E6, E7 | Automated pipeline + auditable review workflow | ✅ |
+| **M4.5** | Form Import (Phase 3) | E10 | Import a form from PDF/CSV/XLS/HTML/URL/image via configurable providers + human review | ✅ |
 | **M5** | Integrations & Security | E8 (part), E9 (part) | OIDC live, real downstream connector, async pipeline | ⏳ |
 | **M6** | Observability & Hardening | E9 | Dashboards, alerting, load/security tested, analytics | ⏳ |
 
-**Current state:** M1–M4 complete (MVP feature-complete for the core lifecycle). M5–M6 planned.
+**Current state:** M1–M4 complete (MVP feature-complete for the core lifecycle); M4.5 (Form Import, Phase 3) complete. M5–M6 planned.
 
 ---
 

@@ -2,6 +2,8 @@ import { NavLink, Route, Routes } from 'react-router-dom';
 import { AppShell, PageHeader } from '@banking-forms/ui';
 import { FormsListPage } from './pages/FormsListPage';
 import { FormBuilderPage } from './pages/FormBuilderPage';
+import { FormImportPage } from './pages/FormImportPage';
+import { ImportProvidersPage } from './pages/ImportProvidersPage';
 import { SubmissionsListPage } from './pages/SubmissionsListPage';
 import { SubmissionDetailPage } from './pages/SubmissionDetailPage';
 
@@ -11,8 +13,14 @@ function AdminNav() {
       <NavLink to="/" end className={({ isActive }) => (isActive ? 'bf-nav-active' : '')}>
         Forms
       </NavLink>
+      <NavLink to="/import" className={({ isActive }) => (isActive ? 'bf-nav-active' : '')}>
+        Import
+      </NavLink>
       <NavLink to="/submissions" className={({ isActive }) => (isActive ? 'bf-nav-active' : '')}>
         Submissions
+      </NavLink>
+      <NavLink to="/settings/import-providers" className={({ isActive }) => (isActive ? 'bf-nav-active' : '')}>
+        Settings
       </NavLink>
     </nav>
   );
@@ -35,6 +43,30 @@ export function App() {
           }
         />
         <Route path="/forms/:formId/builder" element={<FormBuilderPage />} />
+        <Route
+          path="/import"
+          element={
+            <>
+              <PageHeader
+                title="Import a form"
+                description="Upload a PDF, CSV, spreadsheet, or image — or point at a form URL. The platform extracts a draft schema for you to review, edit, and publish."
+              />
+              <FormImportPage />
+            </>
+          }
+        />
+        <Route
+          path="/settings/import-providers"
+          element={
+            <>
+              <PageHeader
+                title="Import providers"
+                description="Choose and configure which engine extracts each source type. External providers plug in via module-service-integration."
+              />
+              <ImportProvidersPage />
+            </>
+          }
+        />
         <Route
           path="/submissions"
           element={
