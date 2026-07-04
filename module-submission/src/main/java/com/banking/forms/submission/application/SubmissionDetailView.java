@@ -9,4 +9,5 @@ public record SubmissionDetailView(
         String formCode,
         String formName,
         String status,
+        String currentSectionKey,
         Map<String, Map<String, Object>> sectionData) {}
