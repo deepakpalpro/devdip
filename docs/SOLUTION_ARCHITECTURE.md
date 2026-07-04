@@ -136,7 +136,7 @@ Detailed class-level breakdown: see [`TECHNICAL_GUIDE.md` §5–9](TECHNICAL_GUI
 - **Multi-tenancy:** shared-schema, tenant-scoped rows (`tenant_id` on all business tables); every query/service is tenant-filtered. (Row-level isolation; DB-per-tenant is a future option.)
 - **Form model:** `form_definition` 1:N `form_version` (`DRAFT`/`PUBLISHED`/`DEPRECATED`); publishing auto-deprecates the prior published version.
 - **Submission model:** `submission` → `submission_section` → `submission_field_value` (KEY_VALUE) or JSON blob (JSON_BLOB); `submission_event` append-only audit; `pipeline_execution` + `submission_sanitized_payload` for processing.
-- **Migrations:** Flyway `V1`–`V8` (schema + seed + sample data). See [`ARCHITECTURE.md` §5](ARCHITECTURE.md) and [`TECHNICAL_GUIDE.md` §7](TECHNICAL_GUIDE.md).
+- **Migrations:** Flyway `V1`–`V9` (schema + seed + sample data + draft resume progress). See [`ARCHITECTURE.md` §5](ARCHITECTURE.md) and [`TECHNICAL_GUIDE.md` §7](TECHNICAL_GUIDE.md).
 - **Encryption:** field-level encryption is enabled by the KEY_VALUE path (`is_encrypted` per field) + PII registry; at-rest DB encryption is a deployment concern.
 
 ---
