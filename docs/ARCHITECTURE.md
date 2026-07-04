@@ -725,6 +725,42 @@ The consumer submit endpoint returns the **post-pipeline** status (typically `PE
 
 ---
 
+### 5.9 Draft Save & Resume (Multi-Section Progress)
+
+Long applications span multiple sections and are rarely completed in one sitting. The platform therefore treats an in-progress `DRAFT` as **server-side state**: each page navigation persists what has been entered, and returning to the application restores both the data and the exact page the applicant left off on — no reliance on the browser.
+
+**Partial (draft) saves.** `SubmissionService.saveSection` is deliberately lenient for drafts: it verifies only that the section exists in the schema and then persists the values through the form's storage strategy. **Required-field validation is *not* enforced here** — a half-filled section is a legitimate draft state. Completeness is enforced once, at `submit` (`validateAllSections`). This mirrors how discovery pre-population seeds partial drafts (§5.6).
+
+**Resume position.** The `submission.current_section_key` column (migration `V9`) records the section the applicant should return to. Every section save also stamps a `resumeSectionKey` (the page the wizard is navigating to), and `GET /submissions/{id}` returns it so the client lands on the right step.
+
+**End-to-end flow:**
+
+```
+PUT /submissions/{id}/sections/{sectionKey}   { data, resumeSectionKey }
+   │  saveSection(): section-exists check → persist via storage strategy (partial OK)
+   ▼  submission.updateCurrentSection(resumeSectionKey)     // remember where to resume
+   204 No Content
+
+… user closes the tab, returns later …
+
+GET /submissions/{id}
+   ▼  { status, currentSectionKey, sectionData }            // data + position restored
+   consumer wizard jumps to currentSectionKey; submit validates all sections and,
+   if incomplete, sends the user to the first section with missing required fields
+```
+
+**Module boundaries.**
+- `module-submission` owns the `current_section_key` field on `Submission` (`updateCurrentSection`) and the partial-save policy; `SectionValidator.sectionExists` gates unknown sections without requiring completeness.
+- `bff-consumer` (`ConsumerSubmissionsController`) accepts an optional `resumeSectionKey` on save and returns `currentSectionKey` on fetch.
+- The consumer wizard (`SubmissionWizardPage`) saves on both *next* and *back*, restores the position once on load, and performs a client-side completeness sweep before submit for a clean UX.
+
+**Trade-offs / boundaries.**
+- Draft data is stored **unencrypted-at-field-level for `JSON_BLOB` forms** just like final data; regulated forms use `KEY_VALUE` where field-level encryption applies equally to drafts.
+- Progress is a single "furthest/last section" pointer, not a full per-field autosave journal — saves happen on page transitions, not on every keystroke. Continuous autosave (debounced) is a straightforward future enhancement using the same endpoint.
+- Because required validation is deferred to submit, drafts can contain incomplete/technically-invalid sections by design; downstream code must treat `DRAFT` data as provisional.
+
+---
+
 ## 6. API Specifications (RESTful)
 
 Base URLs:
