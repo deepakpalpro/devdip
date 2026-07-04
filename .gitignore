@@ -1,0 +1,14 @@
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+node_modules/
+frontend/**/dist/
+
+*.iml
+.idea/
+.vscode/
+*.class
+*.log
+.DS_Store

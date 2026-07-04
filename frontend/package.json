@@ -1,0 +1,15 @@
+{
+  "name": "banking-forms-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:consumer": "npm run dev -w @banking-forms/consumer-portal",
+    "dev:admin": "npm run dev -w @banking-forms/admin-portal",
+    "build": "npm run build -w @banking-forms/consumer-portal && npm run build -w @banking-forms/admin-portal",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}

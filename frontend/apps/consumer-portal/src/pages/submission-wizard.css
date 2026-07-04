@@ -1,0 +1,76 @@
+.submission-wizard {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.submission-stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.submission-step {
+  padding: 0.375rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  border: 1px solid var(--bf-border);
+  color: var(--bf-text-muted);
+  background: var(--bf-surface);
+}
+
+.submission-step-active {
+  border-color: var(--bf-primary);
+  color: var(--bf-primary);
+  background: var(--bf-primary-soft);
+}
+
+.submission-step-done {
+  border-color: color-mix(in srgb, var(--bf-primary) 35%, var(--bf-border));
+  color: var(--bf-text);
+}
+
+.submission-panel {
+  padding: 1.5rem;
+  border: 1px solid var(--bf-border);
+  border-radius: var(--bf-radius-lg);
+  background: var(--bf-surface);
+}
+
+.submission-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.submission-summary dl {
+  display: grid;
+  gap: 1rem;
+  margin: 0;
+}
+
+.submission-summary dt {
+  font-weight: 700;
+  margin-bottom: 0.375rem;
+}
+
+.submission-summary dd {
+  margin: 0;
+  color: var(--bf-text-muted);
+}
+
+.submission-success {
+  padding: 1.5rem;
+  border-radius: var(--bf-radius-lg);
+  background: var(--bf-primary-soft);
+  border: 1px solid color-mix(in srgb, var(--bf-primary) 25%, var(--bf-border));
+}
+
+.submission-prefill-note {
+  padding: 0.75rem 1rem;
+  border-radius: var(--bf-radius-lg);
+  background: var(--bf-primary-soft);
+  border: 1px solid color-mix(in srgb, var(--bf-primary) 25%, var(--bf-border));
+  color: var(--bf-text);
+  font-size: 0.9rem;
+}

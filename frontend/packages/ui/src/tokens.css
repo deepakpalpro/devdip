@@ -1,0 +1,22 @@
+:root {
+  --bf-font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --bf-bg: #f4f7fb;
+  --bf-surface: #ffffff;
+  --bf-text: #10233f;
+  --bf-text-muted: #5b6b82;
+  --bf-border: #d8e0ec;
+  --bf-primary: #0b5fff;
+  --bf-primary-hover: #094bcc;
+  --bf-primary-soft: #e8f0ff;
+  --bf-danger: #b42318;
+  --bf-radius-md: 0.625rem;
+  --bf-radius-lg: 0.875rem;
+  --bf-shadow-sm: 0 1px 2px rgba(16, 35, 63, 0.06);
+}
+
+:root[data-theme='admin'] {
+  --bf-bg: #f6f4ef;
+  --bf-primary: #0f766e;
+  --bf-primary-hover: #0d645d;
+  --bf-primary-soft: #e6f4f1;
+}

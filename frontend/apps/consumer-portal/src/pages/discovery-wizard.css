@@ -1,0 +1,64 @@
+.discovery-wizard {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.discovery-recommendations {
+  display: grid;
+  gap: 1rem;
+}
+
+.discovery-rec {
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--bf-border);
+  border-radius: var(--bf-radius-lg);
+  background: var(--bf-surface);
+  display: grid;
+  gap: 0.75rem;
+}
+
+.discovery-rec-top {
+  border-color: var(--bf-primary);
+  background: var(--bf-primary-soft);
+}
+
+.discovery-rec-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.discovery-rec-title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.discovery-rec-meta {
+  color: var(--bf-text-muted);
+  font-size: 0.85rem;
+}
+
+.discovery-rec-badge {
+  padding: 0.25rem 0.625rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #fff;
+  background: var(--bf-primary);
+  white-space: nowrap;
+}
+
+.discovery-rec-reasons {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--bf-text-muted);
+  font-size: 0.9rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.discovery-rec-action {
+  display: flex;
+  justify-content: flex-end;
+}
