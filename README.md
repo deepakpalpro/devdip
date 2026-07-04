@@ -2,7 +2,16 @@
 
 Multi-tenant banking support platform — form building, submission, processing, and downstream integration.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full technical design.
+## Documentation
+
+| Document | Audience | Contents |
+|----------|----------|----------|
+| [docs/TECHNICAL_GUIDE.md](docs/TECHNICAL_GUIDE.md) | Tech Lead / Developers | Component-by-component walkthrough, component IDs, flows, extension points |
+| [docs/SOLUTION_ARCHITECTURE.md](docs/SOLUTION_ARCHITECTURE.md) | Solution Architect | C4 views, ADRs, NFRs, security/data/integration architecture, roadmap |
+| [docs/PROJECT_MANAGEMENT.md](docs/PROJECT_MANAGEMENT.md) | Project Manager / PO | Epics, user stories + acceptance criteria, sprint plan, milestones, story→component traceability |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | All | Original full technical design (source of truth) |
+
+User stories in the PM doc map to technical components via IDs (e.g. `US-2.1` → `M-FORMDEF`); see the traceability matrix in [PROJECT_MANAGEMENT.md §5](docs/PROJECT_MANAGEMENT.md) and the component index in [TECHNICAL_GUIDE.md §13](docs/TECHNICAL_GUIDE.md).
 
 ## Prerequisites
 
