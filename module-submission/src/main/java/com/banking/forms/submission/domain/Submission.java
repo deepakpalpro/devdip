@@ -33,6 +33,9 @@ public class Submission {
     @Column(name = "idempotency_key", length = 64)
     private String idempotencyKey;
 
+    @Column(name = "current_section_key", length = 100)
+    private String currentSectionKey;
+
     @Column(name = "submitted_at")
     private Instant submittedAt;
 
@@ -76,6 +79,10 @@ public class Submission {
         return idempotencyKey;
     }
 
+    public String getCurrentSectionKey() {
+        return currentSectionKey;
+    }
+
     public Instant getSubmittedAt() {
         return submittedAt;
     }
@@ -90,6 +97,12 @@ public class Submission {
 
     public void assignIdempotencyKey(String idempotencyKey) {
         this.idempotencyKey = idempotencyKey;
+    }
+
+    /** Records the section the applicant should resume on. Only meaningful while the draft is editable. */
+    public void updateCurrentSection(String sectionKey, Instant at) {
+        this.currentSectionKey = sectionKey;
+        this.updatedAt = at;
     }
 
     public void markSubmitted(Instant submittedAt) {

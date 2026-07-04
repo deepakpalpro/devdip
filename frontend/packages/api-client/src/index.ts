@@ -103,6 +103,7 @@ export interface SubmissionDetail {
   formCode: string;
   formName: string;
   schema: FormSchema;
+  currentSectionKey: string | null;
   sectionData: Record<string, Record<string, unknown>>;
 }
 
@@ -270,11 +271,16 @@ export function createApiClient(config: ApiClientConfig = {}) {
       }),
     getSubmission: (submissionId: string) =>
       request<SubmissionDetail>(`/api/consumer/v1/submissions/${submissionId}`, config),
-    saveSection: (submissionId: string, sectionKey: string, data: Record<string, unknown>) =>
+    saveSection: (
+      submissionId: string,
+      sectionKey: string,
+      data: Record<string, unknown>,
+      resumeSectionKey?: string,
+    ) =>
       request<void>(`/api/consumer/v1/submissions/${submissionId}/sections/${encodeURIComponent(sectionKey)}`, config, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data }),
+        body: JSON.stringify({ data, resumeSectionKey: resumeSectionKey ?? null }),
       }),
     submitSubmission: (submissionId: string, idempotencyKey: string) =>
       request<{ submissionId: string; status: string }>(

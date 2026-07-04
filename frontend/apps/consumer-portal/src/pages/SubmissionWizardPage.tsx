@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { SectionRenderer, type FormSectionSchema } from '@banking-forms/form-renderer';
 import { Button, ErrorState, LoadingState, PageHeader } from '@banking-forms/ui';
@@ -55,6 +55,18 @@ export function SubmissionWizardPage() {
     setSectionValues((prev) => ({ ...submission.sectionData, ...prev }));
   }, [submission]);
 
+  // On resume, land on the section the applicant last worked on — but only once, so that the
+  // refetches triggered by each auto-save don't keep yanking the user's position around.
+  const initializedPosition = useRef(false);
+  useEffect(() => {
+    if (!submission || initializedPosition.current) return;
+    initializedPosition.current = true;
+    const resumeKey = submission.currentSectionKey;
+    if (!resumeKey) return;
+    const index = submission.schema.sections.findIndex((section) => section.key === resumeKey);
+    if (index >= 0) setCurrentIndex(index);
+  }, [submission]);
+
   const sections = useMemo(() => submission?.schema.sections ?? [], [submission]);
   const currentSection: FormSectionSchema | undefined = sections[currentIndex];
 
@@ -96,21 +108,18 @@ export function SubmissionWizardPage() {
     });
   };
 
-  const persistSection = async () => {
-    const errors = validateSection(currentSection, values);
-    if (Object.keys(errors).length > 0) {
-      setFieldErrors(errors);
-      return false;
-    }
-    await saveSection.mutateAsync({ sectionKey: currentSection.key, data: values });
+  // Draft-friendly partial save: persist whatever the applicant has entered so far (no required-field
+  // gate) and record the section they should resume on next time. Completeness is enforced on submit.
+  const persistSection = async (resumeSectionKey: string) => {
+    await saveSection.mutateAsync({ sectionKey: currentSection.key, data: values, resumeSectionKey });
     await refetch();
-    return true;
   };
 
   const goNext = async () => {
-    const saved = await persistSection();
-    if (!saved) return;
-    if (currentIndex < sections.length - 1) {
+    const isLast = currentIndex >= sections.length - 1;
+    const resumeKey = isLast ? currentSection.key : sections[currentIndex + 1].key;
+    await persistSection(resumeKey);
+    if (!isLast) {
       setCurrentIndex((index) => index + 1);
       setFieldErrors({});
       return;
@@ -118,7 +127,27 @@ export function SubmissionWizardPage() {
     setMode('review');
   };
 
+  const goBack = async () => {
+    if (currentIndex === 0) return;
+    const resumeKey = sections[currentIndex - 1].key;
+    await persistSection(resumeKey);
+    setCurrentIndex((index) => index - 1);
+    setFieldErrors({});
+  };
+
   const handleSubmit = async () => {
+    // Enforce completeness here: jump to the first section with missing required fields rather than
+    // failing the submit opaquely on the server.
+    for (let index = 0; index < sections.length; index += 1) {
+      const section = sections[index];
+      const errors = validateSection(section, sectionValues[section.key] ?? {});
+      if (Object.keys(errors).length > 0) {
+        setCurrentIndex(index);
+        setFieldErrors(errors);
+        setMode('sections');
+        return;
+      }
+    }
     await submitApplication.mutateAsync();
     if (formCode) {
       localStorage.removeItem(storageKey(formCode));
@@ -207,7 +236,7 @@ export function SubmissionWizardPage() {
           <div className="submission-actions" style={{ marginTop: '1.5rem' }}>
             <div>
               {currentIndex > 0 ? (
-                <Button variant="secondary" onClick={() => setCurrentIndex((index) => index - 1)}>
+                <Button variant="secondary" onClick={goBack} disabled={saveSection.isPending}>
                   Back
                 </Button>
               ) : (

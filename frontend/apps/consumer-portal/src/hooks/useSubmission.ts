@@ -31,8 +31,15 @@ export function useCreateSubmission(formCode: string, discoverySessionId?: strin
 export function useSaveSection(submissionId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ sectionKey, data }: { sectionKey: string; data: Record<string, unknown> }) =>
-      api.saveSection(submissionId, sectionKey, data),
+    mutationFn: ({
+      sectionKey,
+      data,
+      resumeSectionKey,
+    }: {
+      sectionKey: string;
+      data: Record<string, unknown>;
+      resumeSectionKey?: string;
+    }) => api.saveSection(submissionId, sectionKey, data, resumeSectionKey),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: submissionKey(submissionId) }),
   });
 }

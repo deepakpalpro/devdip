@@ -113,20 +113,36 @@ public class SubmissionService {
                 form.code(),
                 form.name(),
                 submission.getStatus().name(),
+                submission.getCurrentSectionKey(),
                 loadSectionData(submissionId, form));
     }
 
     public void saveSection(UUID tenantId, UUID submissionId, String sectionKey, Map<String, Object> data) {
+        saveSection(tenantId, submissionId, sectionKey, data, null);
+    }
+
+    /**
+     * Persists a single section of a draft. This is a <em>partial</em> (auto-)save: required-field
+     * validation is intentionally NOT enforced here so multi-section forms can be filled and left
+     * incomplete across sessions — completeness is enforced only on {@link #submit}. The
+     * {@code resumeSectionKey} (defaulting to the saved section) records where the applicant should
+     * resume next time.
+     */
+    public void saveSection(
+            UUID tenantId, UUID submissionId, String sectionKey, Map<String, Object> data, String resumeSectionKey) {
         var submission = requireDraftSubmission(tenantId, submissionId);
         var form = requireForm(submission.getFormVersionId());
 
-        var normalized = sectionValidator.toMap(data);
-        var errors = sectionValidator.validateSection(form.schema(), sectionKey, normalized);
-        if (!errors.isEmpty()) {
-            throw new SubmissionValidationException("Validation failed for section " + sectionKey);
+        if (!sectionValidator.sectionExists(form.schema(), sectionKey)) {
+            throw new SubmissionValidationException("Unknown section: " + sectionKey);
         }
 
+        var normalized = sectionValidator.toMap(data);
         sectionStorageRouter.resolve(form.storageStrategy()).saveSection(submissionId, sectionKey, normalized);
+
+        String resume = (resumeSectionKey != null && !resumeSectionKey.isBlank()) ? resumeSectionKey : sectionKey;
+        submission.updateCurrentSection(resume, Instant.now());
+        submissionRepository.save(submission);
     }
 
     public Submission submit(UUID tenantId, UUID submissionId, String idempotencyKey) {
