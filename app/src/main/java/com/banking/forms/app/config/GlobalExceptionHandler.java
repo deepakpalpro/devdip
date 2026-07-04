@@ -6,6 +6,8 @@ import com.banking.forms.formdefinition.application.FormSchemaException;
 import com.banking.forms.formimport.application.FormImportException;
 import com.banking.forms.formimport.application.FormImportNotFoundException;
 import com.banking.forms.notification.application.NotificationException;
+import com.banking.forms.downstream.application.DownstreamException;
+import com.banking.forms.serviceintegration.application.ServiceIntegrationException;
 import com.banking.forms.submission.application.SubmissionNotFoundException;
 import com.banking.forms.submission.application.SubmissionValidationException;
 import org.springframework.http.HttpStatus;
@@ -53,6 +55,16 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(NotificationException.class)
     ResponseEntity<SimpleError> handleNotification(NotificationException ex) {
+        return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
+    }
+
+    @ExceptionHandler(DownstreamException.class)
+    ResponseEntity<SimpleError> handleDownstream(DownstreamException ex) {
+        return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
+    }
+
+    @ExceptionHandler(ServiceIntegrationException.class)
+    ResponseEntity<SimpleError> handleServiceIntegration(ServiceIntegrationException ex) {
         return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
     }
 

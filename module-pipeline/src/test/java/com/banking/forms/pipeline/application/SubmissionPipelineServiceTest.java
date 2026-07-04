@@ -8,6 +8,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.banking.forms.downstream.application.DownstreamDispatchService;
 import com.banking.forms.formdefinition.application.FormQueryService;
 import com.banking.forms.formdefinition.application.PublishedFormView;
 import com.banking.forms.formdefinition.domain.StorageStrategy;
@@ -18,6 +19,7 @@ import com.banking.forms.pipeline.infrastructure.PipelineExecutionRepository;
 import com.banking.forms.pipeline.infrastructure.SanitizedPayloadRepository;
 import com.banking.forms.pipeline.spi.AiEvaluationResult;
 import com.banking.forms.pipeline.spi.AiRecommendation;
+import com.banking.forms.pipeline.spi.ServiceCallExecutor;
 import com.banking.forms.submission.application.SectionStorageRouter;
 import com.banking.forms.submission.application.SectionStorageStrategy;
 import com.banking.forms.submission.application.SectionValidator;
@@ -60,6 +62,8 @@ class SubmissionPipelineServiceTest {
     @Mock private SanitizedPayloadRepository sanitizedPayloadRepository;
     @Mock private AiEvaluatorRouter aiEvaluatorRouter;
     @Mock private AiEvaluationRepository aiEvaluationRepository;
+    @Mock private DownstreamDispatchService downstreamDispatchService;
+    @Mock private ServiceCallExecutor serviceCallExecutor;
     @Mock private Submission submission;
 
     private SubmissionPipelineService service;
@@ -77,6 +81,8 @@ class SubmissionPipelineServiceTest {
                 sanitizedPayloadRepository,
                 aiEvaluatorRouter,
                 aiEvaluationRepository,
+                downstreamDispatchService,
+                serviceCallExecutor,
                 new ObjectMapper());
 
         Map<String, Map<String, Object>> sectionData = Map.of("loan", Map.of("amount", 5000));
@@ -94,6 +100,11 @@ class SubmissionPipelineServiceTest {
         when(piiScrubber.scrub(eq("LOAN"), any())).thenReturn(new ScrubResult(sectionData, List.of()));
         when(sanitizedPayloadRepository.findBySubmissionId(SUBMISSION)).thenReturn(Optional.empty());
         when(aiEvaluationRepository.findBySubmissionId(SUBMISSION)).thenReturn(Optional.empty());
+        when(downstreamDispatchService.enqueueForSubmission(
+                        eq(TENANT), eq(SUBMISSION), anyString(), any(), any(), any()))
+                .thenReturn(1);
+        when(serviceCallExecutor.isEnabled()).thenReturn(true);
+        when(serviceCallExecutor.invoke(any())).thenReturn(1);
     }
 
     @Test
@@ -107,6 +118,10 @@ class SubmissionPipelineServiceTest {
         assertThat(result.status()).isEqualTo("COMPLETED");
         verify(submission).markUnderReview(any());
         verify(eventRecorder).record(eq(SUBMISSION), eq("AI_EVALUATED"), any(), any());
+        verify(eventRecorder).record(eq(SUBMISSION), eq("DOWNSTREAM_ENQUEUED"), any(), any());
+        verify(serviceCallExecutor).invoke(any());
+        verify(downstreamDispatchService)
+                .enqueueForSubmission(eq(TENANT), eq(SUBMISSION), eq("LOAN"), any(), eq("APPROVE"), eq(0.12));
 
         ArgumentCaptor<AiEvaluation> captor = ArgumentCaptor.forClass(AiEvaluation.class);
         verify(aiEvaluationRepository).save(captor.capture());

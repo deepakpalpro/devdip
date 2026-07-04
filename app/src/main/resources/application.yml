@@ -54,6 +54,16 @@ logging:
   level:
     com.banking.forms: INFO
 
+pipeline:
+  process-mode: async
+  dispatch-interval-ms: 3000
+  max-attempts: 3
+  dispatch-batch-size: 10
+  retry-backoff-ms: 5000
+
+service-integration:
+  enabled: true
+
 ---
 spring:
   config:

@@ -2,7 +2,7 @@ package com.banking.forms.bff.consumer.api;
 
 import com.banking.forms.discovery.application.DiscoveryService;
 import com.banking.forms.formdefinition.application.FormQueryService;
-import com.banking.forms.pipeline.application.SubmissionPipelineService;
+import com.banking.forms.pipeline.application.PipelineSubmitCoordinator;
 import com.banking.forms.submission.application.SubmissionDetailView;
 import com.banking.forms.submission.application.SubmissionNotFoundException;
 import com.banking.forms.submission.application.SubmissionService;
@@ -36,17 +36,17 @@ public class ConsumerSubmissionsController {
     private final SubmissionService submissionService;
     private final FormQueryService formQueryService;
     private final DiscoveryService discoveryService;
-    private final SubmissionPipelineService pipelineService;
+    private final PipelineSubmitCoordinator pipelineSubmitCoordinator;
 
     public ConsumerSubmissionsController(
             SubmissionService submissionService,
             FormQueryService formQueryService,
             DiscoveryService discoveryService,
-            SubmissionPipelineService pipelineService) {
+            PipelineSubmitCoordinator pipelineSubmitCoordinator) {
         this.submissionService = submissionService;
         this.formQueryService = formQueryService;
         this.discoveryService = discoveryService;
-        this.pipelineService = pipelineService;
+        this.pipelineSubmitCoordinator = pipelineSubmitCoordinator;
     }
 
     @PostMapping
@@ -137,9 +137,9 @@ public class ConsumerSubmissionsController {
             @PathVariable("id") UUID id) {
         try {
             submissionService.submit(tenantId, id, idempotencyKey);
-            // Run the automated pipeline (validate -> PII scrub -> downstream). It never throws;
-            // failures are recorded and leave the submission in a reviewable state.
-            pipelineService.process(tenantId, id);
+            // Async mode: pipeline runs off the request path via outbox + worker (returns SUBMITTED).
+            // Sync mode (pipeline.process-mode=sync): runs inline and returns post-pipeline status.
+            pipelineSubmitCoordinator.onSubmitted(tenantId, id);
             SubmissionDetailView detail = submissionService.getSubmission(tenantId, id);
             return ResponseEntity.accepted().body(new SubmitResponse(id, detail.status()));
         } catch (SubmissionNotFoundException ex) {

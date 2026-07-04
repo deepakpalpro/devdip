@@ -179,15 +179,17 @@ Modules communicate via:
 - Output: sanitized payload for AI, analytics, and downstream — never mutates the source of record
 
 #### `module-service-integration`
-- Provider catalog (credit bureau, identity verification, tax residency API)
-- Adapter interface: `ServiceAdapter.execute(context, config) → ServiceResult`
-- Per-form overrides: which provider, credentials profile, timeout, retry policy
-- Circuit breaker (Resilience4j) per provider
+- **Service adapter registry (implemented)** — `ServiceAdapter` SPI + `service_provider` registry + `ServiceAdapterRouter`; invoked during pipeline SERVICE_CALL on the PII-scrubbed payload (see §5.8)
+- In-JVM default `log-service` + `rest-api` (JDK HttpClient); `credit-bureau` and `identity-verify` are configured-but-unavailable seams
+- Also hosts external SPI implementations: Ollama vision form-import, Ollama AI evaluator, WhatsApp Cloud notification channel
+- Every call logged to `service_call_log`; fail-safe — service errors never fail the pipeline
 
 #### `module-downstream`
-- Connector types: `EVENT_BUS`, `OBJECT_STORAGE`, `FILE_SYSTEM`, `REST_API_BATCH`, `REST_API_REALTIME`
-- Delivery guarantees: at-least-once with idempotent consumer design
-- Per-form routing rules (approved only, include attachments, schema version)
+- **Downstream connectors (implemented)** — pluggable delivery of the PII-scrubbed submission payload to external systems after pipeline processing (see §5.8)
+- `DownstreamConnector` SPI + `downstream_provider` registry + `DownstreamConnectorRouter` (priority-based fan-out to all enabled providers with an implementation)
+- Durable transactional outbox (`downstream_outbox`) written in the **same transaction** as the pipeline DOWNSTREAM step; async `@Scheduled` dispatcher with retries, backoff, and dead-lettering
+- In-JVM default `log-sink` (zero-setup, demoable) and `rest-webhook` (JDK `HttpClient` POST/PUT); `kafka-stream` and `s3-archive` are configured-but-unavailable seams until adapters land in `module-service-integration`
+- Advisory + fail-safe: downstream errors never affect the submission flow; every attempt is logged to the submission timeline (`DOWNSTREAM_QUEUED/DISPATCHED/FAILED/SKIPPED`)
 
 #### `module-notification`
 - **Multi-channel customer notifications (implemented)** — event-driven on submission lifecycle transitions (submit + review decisions), with a configurable, data-driven provider registry mirroring form-import (see §5.11)
@@ -706,12 +708,14 @@ When a consumer submits, an **automated pipeline** runs before the application r
 ```
 POST /submissions/{id}/submit
    │  SubmissionService.submit()                     → status SUBMITTED, event SUBMITTED (tx commits)
-   ▼  SubmissionPipelineService.process()            (new tx; never throws)
+   ▼  (async) PipelineOutboxDispatcher picks up outbox_event → SubmissionPipelineService.process()
    ├─ PIPELINE_STARTED
    ├─ 1. VALIDATE     status→VALIDATING  re-run SectionValidator over stored data   → event VALIDATED
    ├─ 2. PII_SCRUB    status→PROCESSING  PiiScrubber → persist SanitizedPayload      → event PII_SCRUBBED
    ├─ 3. AI_EVALUATE  AiEvaluatorRouter scores the sanitized payload (fail-safe)     → event AI_EVALUATED
-   ├─ 4. DOWNSTREAM   (stub) dispatch sanitized payload to analytics stream          → event DOWNSTREAM_DISPATCHED
+   ├─ 4. SERVICE_CALL ServiceCallExecutor invokes enabled external adapters (fail-safe) → event SERVICE_CALL_*
+   ├─ 5. DOWNSTREAM   DownstreamDispatchService enqueues sanitized payload to enabled connectors
+   │                  (transactional outbox → async dispatch)                              → event DOWNSTREAM_QUEUED
    └─ COMPLETE        status→PENDING_REVIEW                                          → event PIPELINE_COMPLETED
 ```
 
@@ -721,14 +725,14 @@ The consumer submit endpoint returns the **post-pipeline** status (typically `PE
 
 **AI evaluation (advisory).** The `AI_EVALUATE` step runs on the **sanitized** payload only (PII always scrubbed first) and produces a risk score `[0,1]` + advisory recommendation (`APPROVE`/`REVIEW`/`REJECT`) + explainability `signals`, persisted to `submission_ai_evaluation` (one row per submission) and surfaced in the pipeline report + timeline (`AI_EVALUATED`). It is a **pluggable seam** — `AiEvaluator` implementations are Spring beans; `AiEvaluatorRouter` selects the active one via `pipeline.ai.evaluator` (default `heuristic`) and can disable the step entirely (`pipeline.ai.enabled=false`). The default `HeuristicAiEvaluator` (`module-pipeline`) is deterministic and dependency-free (completeness / high-value amount / missing-contact / risk-keyword signals); an optional `OllamaAiEvaluator` (`module-service-integration`) scores via a local Ollama text model. **AI never auto-decides** — the recommendation only assists the human reviewer, and the step is fail-safe (any evaluator error/timeout degrades to `REVIEW` and never fails the submission).
 
+**Downstream delivery.** The `DOWNSTREAM` step fans out the PII-scrubbed payload (plus optional AI risk metadata) to every **enabled** `downstream_provider` that has an in-JVM or service-integration implementation. `DownstreamDispatchService.enqueueForSubmission` writes one `downstream_outbox` row per provider (`PENDING`) in the **same transaction** as the pipeline advance — the outbox pattern guarantees delivery intent commits atomically with the submission state change. A `@Scheduled` `DownstreamDispatcher` later delivers each row via its connector (`log-sink` default, `rest-webhook` when configured); retries with linear backoff → dead-letter (`FAILED`). Timeline events: `DOWNSTREAM_QUEUED`, `DOWNSTREAM_DISPATCHED`, `DOWNSTREAM_FAILED`, `DOWNSTREAM_SKIPPED`. The step is **fail-safe** — downstream errors never fail the submit request.
+
 **Persistence & audit.** Overall run status/step/error is tracked in `pipeline_execution` (`RUNNING`/`COMPLETED`/`FAILED`); the per-step narrative lives in `submission_event` (actor = system UUID `0…0`), so both automated and manual actions share one chronological timeline in the admin UI.
 
 **Failure handling.** The pipeline **never fails the submit request**: any step exception is caught, the run is marked `FAILED` with `error_details`, a `PIPELINE_FAILED` event is recorded, and the submission is reverted to `SUBMITTED` (so an admin can still `start` a manual review). Since validation already ran at submit time, the VALIDATE step is defense-in-depth and rarely fails.
 
 **Trade-offs / boundaries.**
-- The pipeline currently runs **synchronously** in the submit request (no message broker yet). The `outbox_event` table and a future `@TransactionalEventListener`/broker would move this off the request path; the step contract and audit events stay the same. The AI step's synchronous timeout budget is bounded by the evaluator (the default heuristic is instant; the Ollama evaluator has its own timeout and fails safe).
-- Steps are **hard-coded** (`VALIDATE, PII_SCRUB, AI_EVALUATE, DOWNSTREAM`) rather than driven by `pipeline_config`; `PipelineStepType` still enumerates the fuller catalog (SERVICE_CALL, NOTIFY) for that evolution.
-- `DOWNSTREAM` is a stub (records an event) — real connectors live in `module-downstream`.
+- The pipeline **enqueue** is async by default: submit returns `SUBMITTED` and a `PIPELINE_REQUESTED` row is written to the generic `outbox_event` table; `PipelineOutboxDispatcher` runs the worker off the request path (~3s poll). Set `pipeline.process-mode=sync` to restore inline processing. Downstream **delivery** remains async via `downstream_outbox`. Kafka broker fan-out is a future seam (`PipelineEventPublisher` SPI).
 
 ---
 

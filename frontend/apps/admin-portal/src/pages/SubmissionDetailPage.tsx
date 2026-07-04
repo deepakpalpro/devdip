@@ -3,6 +3,8 @@ import { Link, useParams } from 'react-router-dom';
 import type { FormFieldSchema, PipelineReport, ReviewActionKey, TimelineEvent } from '@banking-forms/api-client';
 import { Button, ErrorState, LoadingState, PageHeader } from '@banking-forms/ui';
 import { useAdminSubmission, useReviewSubmission, useSubmissionPipeline } from '../hooks/useAdminSubmissions';
+import { useOutboxEvents } from '../hooks/useDownstream';
+import { useServiceCalls } from '../hooks/useServiceProviders';
 import './admin-submissions.css';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -19,11 +21,22 @@ const STATUS_LABELS: Record<string, string> = {
 const EVENT_LABELS: Record<string, string> = {
   SUBMITTED: 'Application submitted',
   PIPELINE_STARTED: 'Automated pipeline started',
+  PIPELINE_QUEUED: 'Pipeline queued (async)',
+  PIPELINE_OUTBOX_FAILED: 'Pipeline outbox failed',
   VALIDATED: 'Validation passed',
   PII_SCRUBBED: 'PII scrubbed',
   AI_EVALUATED: 'AI risk evaluation',
   AI_EVALUATION_SKIPPED: 'AI evaluation skipped',
-  DOWNSTREAM_DISPATCHED: 'Dispatched downstream',
+  SERVICE_CALL_INVOKED: 'External services invoked',
+  SERVICE_CALL_COMPLETED: 'External services completed',
+  SERVICE_CALL_SUCCEEDED: 'External service succeeded',
+  SERVICE_CALL_FAILED: 'External service failed',
+  SERVICE_CALL_SKIPPED: 'External services skipped',
+  DOWNSTREAM_ENQUEUED: 'Downstream enqueued',
+  DOWNSTREAM_QUEUED: 'Downstream queued',
+  DOWNSTREAM_DISPATCHED: 'Downstream dispatched',
+  DOWNSTREAM_FAILED: 'Downstream failed',
+  DOWNSTREAM_SKIPPED: 'Downstream skipped',
   PIPELINE_COMPLETED: 'Automated pipeline completed',
   PIPELINE_FAILED: 'Automated pipeline failed',
   REVIEW_STARTED: 'Review started',
@@ -212,6 +225,74 @@ function PipelineCard({ report }: { report: PipelineReport }) {
   );
 }
 
+function ServiceCallsBlock({ submissionId }: { submissionId: string }) {
+  const { data, isLoading } = useServiceCalls(submissionId);
+  if (isLoading || !data || data.length === 0) {
+    return null;
+  }
+  return (
+    <section className="submission-section-card">
+      <h2 className="submission-section-title">Service call log</h2>
+      <table className="bf-table">
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Duration</th>
+            <th>Ref / error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row) => (
+            <tr key={row.id}>
+              <td><code>{row.providerCode}</code></td>
+              <td>{row.adapterType}</td>
+              <td><span className="bf-badge">{row.status}</span></td>
+              <td>{row.durationMs != null ? `${row.durationMs}ms` : '—'}</td>
+              <td>{row.providerRef ?? row.error ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function OutboxBlock({ submissionId }: { submissionId: string }) {
+  const { data, isLoading } = useOutboxEvents(submissionId);
+  if (isLoading || !data || data.length === 0) {
+    return null;
+  }
+  return (
+    <section className="submission-section-card">
+      <h2 className="submission-section-title">Downstream outbox</h2>
+      <table className="bf-table">
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Attempts</th>
+            <th>Ref / error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row) => (
+            <tr key={row.id}>
+              <td><code>{row.providerCode}</code></td>
+              <td>{row.connectorType}</td>
+              <td><span className="bf-badge">{row.status}</span></td>
+              <td>{row.attempts}</td>
+              <td>{row.providerRef ?? row.error ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
 export function SubmissionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data, isLoading, error } = useAdminSubmission(id);
@@ -273,6 +354,10 @@ export function SubmissionDetailPage() {
       ) : null}
 
       {pipeline.data ? <PipelineCard report={pipeline.data} /> : null}
+
+      {id ? <ServiceCallsBlock submissionId={id} /> : null}
+
+      {id ? <OutboxBlock submissionId={id} /> : null}
 
       {data.schema.sections.map((section) => (
         <section key={section.key} className="submission-section-card">

@@ -66,7 +66,7 @@ banking-forms-platform/
 ├── module-observability/       # M-OBSERV     — metrics/tracing config
 ├── module-service-integration/ # M-SVCINT     — external/AI provider adapters (Ollama vision, WhatsApp Cloud)
 ├── module-notification/        # M-NOTIFY     — multi-channel customer notifications (email/WhatsApp), outbox
-├── module-downstream/          # (placeholder — Phase 4)
+├── module-downstream/          # M-DOWNSTREAM  — pluggable downstream connectors + transactional outbox
 ├── module-analytics/           # (placeholder — Phase 5)
 ├── docs/                       # documentation
 └── frontend/                   # FE — React monorepo (apps + packages)
@@ -201,20 +201,24 @@ Runs the automated post-submit pipeline and exposes a report for admins.
 
 | Kind | Classes |
 |------|---------|
-| Domain | `PipelineExecution` (status `RUNNING`/`COMPLETED`/`FAILED`, `current_step`), `SanitizedPayload`, `AiEvaluation` (advisory AI result), `PipelineStepType` (`VALIDATE`, `PII_SCRUB`, `AI_EVALUATE`, `SERVICE_CALL`, `DOWNSTREAM`, `NOTIFY`) |
-| SPI (`spi/`) | `AiEvaluator` (`evaluatorId()` + `evaluate(AiEvaluationContext)`), `AiEvaluationContext`, `AiEvaluationResult`, `AiRecommendation` (`APPROVE`/`REVIEW`/`REJECT`) |
-| Application | `SubmissionPipelineService` (live pipeline), `AiEvaluatorRouter` (evaluator selection + fail-safe), `PipelineOrchestrator`, `PipelineResult`; views: `PipelineReportView`, `PipelineExecutionView`, `TransformedFieldView`, `AiEvaluationView` |
-| Infra | `PipelineExecutionRepository`, `SanitizedPayloadRepository`, `AiEvaluationRepository`, `HeuristicAiEvaluator` (default `AiEvaluator`) |
+| Domain | `PipelineExecution`, `SanitizedPayload`, `AiEvaluation`, `PipelineOutboxEvent` (generic `outbox_event` table), `PipelineStepType` |
+| SPI (`spi/`) | `AiEvaluator`, `AiEvaluationContext`, `AiEvaluationResult`, `AiRecommendation`; `PipelineEventPublisher` (broker seam) |
+| Application | `SubmissionPipelineService`, `PipelineOutboxService`, `PipelineOutboxDispatcher`, `PipelineLifecycleListener`, `PipelineSubmitCoordinator`, `AiEvaluatorRouter`, `PipelineProperties` (`pipeline.*`); views: `PipelineReportView`, `PipelineOutboxView`, … |
+| Infra | `PipelineExecutionRepository`, `SanitizedPayloadRepository`, `AiEvaluationRepository`, `PipelineOutboxRepository`, `HeuristicAiEvaluator`, `LogPipelineEventPublisher` |
 
-**Live pipeline** (`SubmissionPipelineService.process`, invoked synchronously by the consumer submit endpoint):
-1. **VALIDATE** — re-validate sections → `VALIDATED` event; advances `SUBMITTED → VALIDATING`.
-2. **PII_SCRUB** — `PiiScrubber` produces a sanitized copy persisted to `submission_sanitized_payload`; advances `VALIDATING → PROCESSING`, `PII_SCRUBBED` event.
-3. **AI_EVALUATE** — `AiEvaluatorRouter` scores the **sanitized** payload → risk score + advisory `APPROVE`/`REVIEW`/`REJECT` + signals, persisted to `submission_ai_evaluation`, `AI_EVALUATED` event. Fail-safe (degrades to `REVIEW`); skippable via `pipeline.ai.enabled=false`.
-4. **DOWNSTREAM** — (placeholder dispatch) → `PIPELINE_COMPLETED`, submission `PROCESSING → PENDING_REVIEW`.
-- **Failure handling:** failures are caught, not thrown — submission reverts to `SUBMITTED`, `PipelineExecution.fail()` records `error_details`, and a `PIPELINE_FAILED` event is written. Submit never fails because of the pipeline (the AI step in particular never fails a submission).
-- **AI config:** `pipeline.ai.enabled` (default `true`), `pipeline.ai.evaluator` (default `heuristic`; set `ollama` to use `M-SVCINT`'s evaluator), `pipeline.ai.ollama.*` (endpoint/model/timeout). AI is **advisory** — it never changes the submission's terminal status.
+**Trigger (async default):** submit → `PipelineLifecycleListener` enqueues `PIPELINE_REQUESTED` in `outbox_event` → returns `SUBMITTED` → `PipelineOutboxDispatcher` (~3s) runs `SubmissionPipelineService.process`. Sync fallback: `pipeline.process-mode=sync`.
 
-*Implements:* `US-6.1`, `US-6.2`, `US-6.3`, `US-7.4`, `US-8.3`.
+**Pipeline steps** (`SubmissionPipelineService.process`):
+1. **VALIDATE** — re-validate sections → `VALIDATED`; `SUBMITTED → VALIDATING`.
+2. **PII_SCRUB** — sanitized copy → `submission_sanitized_payload`; `VALIDATING → PROCESSING`, `PII_SCRUBBED`.
+3. **AI_EVALUATE** — advisory risk score on sanitized payload; fail-safe → `REVIEW`.
+4. **SERVICE_CALL** — external API adapters on sanitized payload via `ServiceCallExecutor`; fail-safe.
+5. **DOWNSTREAM** — enqueue to `downstream_outbox` per enabled connector; `PROCESSING → PENDING_REVIEW`, `PIPELINE_COMPLETED`.
+- Fail-safe throughout; submit never fails because of the pipeline.
+
+**Config:** `pipeline.process-mode` (`async` default / `sync`), `pipeline.dispatch-interval-ms`, `pipeline.max-attempts`, `pipeline.ai.*`.
+
+*Implements:* `US-6.1`, `US-6.2`, `US-6.3`, `US-7.4`, `US-8.2`, `US-8.3`.
 
 ---
 
@@ -266,18 +270,19 @@ Turns an existing artifact (PDF / CSV / XLS(X) / HTML page / URL / image) into a
 
 ---
 
-### 5.10 `M-SVCINT` — Service Integration / AI Providers (`module-service-integration`)
-Hosts external/AI implementations of platform SPIs: the `M-FORMIMPORT` extractor SPI and the `M-PIPELINE` `AiEvaluator` SPI. Depends on `module-form-import` and `module-pipeline` for those SPIs only (one-way — neither depends back on `M-SVCINT`).
+### 5.10 `M-SVCINT` — Service Integration (`module-service-integration`)
+Hosts the **service adapter registry** (external API integrations during pipeline SERVICE_CALL) plus external SPI implementations for form-import, AI evaluation, and WhatsApp.
 
 | Kind | Classes |
 |------|---------|
-| Form-import providers | `OllamaVisionFormExtractor` (`ollama-vision`: base64-encodes the image, downscales to `maxImageDimension`, calls a local **Ollama** `/api/generate` with a JSON-schema prompt using a vision model such as `llava`, parses the response into `ExtractedForm`; endpoint/model/prompt/timeout configurable via `config_json`), `LlmVisionFormExtractor` (`llm-vision`: generic hosted-LLM seam — disabled by default, throws until wired to a real provider) |
-| AI evaluators | `OllamaAiEvaluator` (`ollama`: implements the `M-PIPELINE` `AiEvaluator` SPI; scores a sanitized submission via a local Ollama text model — default `llama3.2` — opt-in via `pipeline.ai.evaluator=ollama`, fail-safe through `AiEvaluatorRouter`) |
-| Notification channels | `WhatsAppCloudChannel` (`whatsapp-cloud`: implements the `M-NOTIFY` `NotificationChannel` SPI; delivers via Meta's WhatsApp **Cloud API** using JDK `HttpClient` + Jackson — approved **template** message outside the 24h window, else free-form text; `endpoint`/`phoneNumberId`/`secretRef` via `config_json`; disabled by default, fail-safe) |
+| SPI (`spi/`) | `ServiceAdapter` (`adapterId()` + `adapterType()` + `execute(ServiceRequest, AdapterConfig)`), `ServiceRequest`, `ServiceResult`, `AdapterConfig`, `AdapterTypes` |
+| Application | `ServiceIntegrationService` (implements `M-PIPELINE` `ServiceCallExecutor`), `ServiceAdapterRouter`, `ServiceSettingsService`; `ServiceIntegrationProperties` (`service-integration.*`) |
+| Domain / Infra | `ServiceProvider`, `ServiceCallLog`, repositories; adapters `LogServiceAdapter` (`log-service`, default) + `RestServiceAdapter` (`rest-api`) |
+| External SPI beans | `OllamaVisionFormExtractor`, `LlmVisionFormExtractor`, `OllamaAiEvaluator`, `WhatsAppCloudChannel` |
 
-**Ollama runtime** — a local Ollama daemon (run via Docker: `ollama/ollama` on `localhost:11434`, model `llava` pulled once) does on-device vision inference; no data leaves the host. `config_json` for the `ollama-vision` provider holds `endpoint`, `model`, `prompt`, `timeoutSeconds`, `maxImageDimension`; the provider is **disabled by default** (in-JVM parsers are the zero-setup path) and enabled from the admin Settings page once Ollama is running.
+**Flow:** Pipeline step 4 calls `ServiceCallExecutor.invoke` → fan-out to enabled `service_provider` rows → each adapter executes on PII-scrubbed payload → `service_call_log` + timeline (`SERVICE_CALL_*`). **Fail-safe** — never fails the pipeline.
 
-*Implements:* `US-10.3` (image/vision source), `US-8.3` (AI evaluation step — optional Ollama evaluator), `US-8.5` (WhatsApp channel).
+*Implements:* `US-8.4`, `US-10.3`, `US-8.3`, `US-8.5`.
 
 ### 5.11 `M-NOTIFY` — Customer Notifications (`module-notification`)
 Notifies customers on submission lifecycle transitions (submit + review decisions) over email and/or WhatsApp, using a **configurable, data-driven provider registry** (mirrors `M-FORMIMPORT`). Depends on `module-submission` + `module-form-definition` for the lifecycle event and recipient resolution.
@@ -292,8 +297,21 @@ Notifies customers on submission lifecycle transitions (submit + review decision
 
 **Config:** `notifications.enabled` (default `true`), `notifications.require-consent` (default `false`), `notifications.max-attempts` (default `3`), `notifications.dispatch-interval-ms` (default `5000`), `notifications.retry-backoff-ms` (default `10000`). Recipients are masked in logs/views; secrets resolved from env via `secretRef`. *Implements:* `US-8.5`.
 
-### 5.12 Placeholder modules
-`module-downstream`, `module-analytics` are scaffolded (build files only) for Phase 4/5 features (Kafka/S3/REST connectors, analytics export). *Maps to:* `US-9.x` (planned).
+### 5.12 `M-DOWNSTREAM` — Downstream Connectors (`module-downstream`)
+Delivers the PII-scrubbed submission payload to external systems after pipeline processing, using a **configurable, data-driven provider registry** (mirrors `M-NOTIFY` / `M-FORMIMPORT`). Depends on `module-submission` for timeline events.
+
+| Kind | Classes |
+|------|---------|
+| SPI (`spi/`) | `DownstreamConnector` (`connectorId()` + `connectorType()` + `dispatch(OutboundEnvelope, ConnectorConfig)`), `OutboundEnvelope`, `DispatchResult`, `ConnectorConfig`, `ConnectorTypes` (`log`/`rest`/`kafka`/`s3`) |
+| Application | `DownstreamDispatchService` (enqueue in pipeline tx + `dispatch` + retry/DLQ), `DownstreamConnectorRouter` (fan-out to enabled providers), `DownstreamDispatcher` (`@Scheduled` outbox drain), `DownstreamSettingsService`; `DownstreamProperties` (`downstream.*`) |
+| Domain / Infra | `DownstreamProvider`, `OutboxEvent` (+ `OutboxStatus`), repositories; in-JVM connectors `LogDownstreamConnector` (`log-sink`, default) + `RestDownstreamConnector` (`rest-webhook`) |
+
+**Flow:** Pipeline step 4 calls `DownstreamDispatchService.enqueueForSubmission` → one `downstream_outbox` row (`PENDING`) per enabled provider → `@Scheduled` dispatcher delivers via connector: `DISPATCHED` on success, retry with linear backoff up to `downstream.max-attempts`, then dead-letter to `FAILED`. Timeline: `DOWNSTREAM_QUEUED/DISPATCHED/FAILED/SKIPPED`. **Fail-safe** — never affects submit/review.
+
+**Config:** `downstream.enabled` (default `true`), `downstream.max-attempts` (default `3`), `downstream.dispatch-interval-ms` (default `5000`), `downstream.retry-backoff-ms` (default `10000`). Secrets via `secretRef`. *Implements:* `US-8.1`.
+
+### 5.13 Placeholder modules
+`module-analytics` is scaffolded (build file only) for Phase 4/5 analytics export. *Maps to:* planned analytics features.
 
 ---
 
@@ -308,7 +326,7 @@ Notifies customers on submission lifecycle transitions (submit + review decision
 | `ConsumerSubmissionsController` | `GET /submissions` (my apps), `POST /submissions` (create draft), `GET /submissions/{id}`, `PUT /submissions/{id}/sections/{sectionKey}` (save section), `POST /submissions/{id}/submit`, `DELETE /submissions/{id}` (discard own draft) |
 | `DevRequestContext` | resolves `X-Dev-User-Id` (default dev user) |
 
-Submit runs the pipeline synchronously and returns `202 Accepted` with the resulting status.
+Submit enqueues the pipeline (async default) and returns `202 Accepted` with status `SUBMITTED`; the worker advances to `PENDING_REVIEW` within a few seconds.
 
 *Implements:* `US-3.x`, `US-4.x`, `US-5.x`.
 
@@ -318,14 +336,16 @@ Submit runs the pipeline synchronously and returns `202 Accepted` with the resul
 | `AdminFormsController` | `GET /forms`, `GET /forms/{id}`, `POST /forms`, `POST /forms/{id}/versions`, `PUT /forms/{id}/versions/{versionId}`, `POST /forms/{id}/versions/{versionId}/publish` |
 | `AdminSubmissionsController` | `GET /submissions`, `GET /submissions/{id}` (detail + timeline) |
 | `AdminReviewController` | `POST /submissions/{id}/review/{start|approve|reject|request-info}` |
-| `AdminPipelineController` | `GET /submissions/{id}/pipeline` (execution + sanitized payload) |
+| `AdminPipelineController` | `GET /submissions/{id}/pipeline` (execution + sanitized payload), `GET /submissions/{id}/pipeline/outbox` (async queue log) |
 | `AdminFormImportController` | `POST /form-imports` (upload file), `POST /form-imports/from-url` (fetch a URL), `GET /form-imports`, `GET /form-imports/{id}`, `POST /form-imports/{id}/accept` |
 | `AdminFormImportProviderController` | `GET /form-import-providers`, `PUT /form-import-providers/{code}` (enable/disable, priority, `config`) |
 | `AdminNotificationProviderController` | `GET /notification-providers`, `PUT /notification-providers/{code}` (enable/disable, priority, `config`), `GET /notification-providers/templates` |
+| `AdminDownstreamProviderController` | `GET /downstream-providers`, `PUT /downstream-providers/{code}` (enable/disable, priority, `config`), `GET /downstream-providers/outbox/{submissionId}` (delivery log) |
+| `AdminServiceProviderController` | `GET /service-providers`, `PUT /service-providers/{code}`, `GET /service-providers/calls/{submissionId}` (call log) |
 | `NotificationWebhookController` | `POST /api/webhooks/notifications/{provider}` (provider delivery-status callback → `DELIVERED`/`FAILED`; unauthenticated at the gateway — signature verification is the real control) |
 | `AdminRequestContext` | resolves admin actor id |
 
-*Implements:* `US-2.x`, `US-7.x`, `US-8.5`, `US-10.x`.
+*Implements:* `US-2.x`, `US-7.x`, `US-8.1`, `US-8.4`, `US-8.5`, `US-10.x`.
 
 ---
 
@@ -348,6 +368,9 @@ Flyway migrations in `app/src/main/resources/db/migration/`:
 | `V11` | `form_import_provider` (configurable extractor registry) + seed: `pdfbox`, `csv`, `poi-spreadsheet`, `jsoup-html` (enabled); `ollama-vision`, `llm-vision` (disabled) |
 | `V12` | `submission_ai_evaluation` (advisory AI risk score + recommendation + signals; one row per submission) |
 | `V13` | `notification_provider` (channel registry) + `notification_template` (per event/channel/locale) + `notification_message` (outbox + delivery log); seed: `log-email` (enabled), `smtp-email`/`whatsapp-cloud` (disabled) + default email/WhatsApp templates |
+| `V14` | `downstream_provider` (connector registry) + `downstream_outbox` (transactional outbox + delivery log); seed: `log-sink` (enabled), `rest-webhook`/`kafka-stream`/`s3-archive` (disabled) |
+| `V15` | Extend generic `outbox_event` for async pipeline (`tenant_id`, `submission_id`, `attempts`, `error`, `updated_at`) |
+| `V16` | `service_provider` (adapter registry) + `service_call_log`; seed: `log-service` (enabled), `rest-api`/`credit-bureau`/`identity-verify` (disabled) |
 
 **Central tables:** `form_definition` → `form_version` (1:N, unique per version number). `submission` → `submission_section` → `submission_field_value`. `submission` → `submission_event` (append-only audit). `submission` → `pipeline_execution` + `submission_sanitized_payload`. IDs are `BINARY(16)` UUIDs. Detailed column-level design lives in [`ARCHITECTURE.md` §5](ARCHITECTURE.md).
 
@@ -412,9 +435,12 @@ Shared presentational components (`AppShell` with nav slot, `PageHeader`, `Butto
 | Shell/routes | `App.tsx`, `main.tsx` | Router + nav |
 | Forms list | `pages/FormsListPage.tsx`, `hooks/useAdminForms.ts` | List forms, create new, latest version/status |
 | Builder | `pages/FormBuilderPage.tsx`, `pages/formStatus.ts` | Version selector + JSON schema editor + save draft/publish/new version |
-| Submissions | `pages/SubmissionsListPage.tsx`, `pages/SubmissionDetailPage.tsx`, `hooks/useAdminSubmissions.ts` | Queue, detail (sections + timeline), review actions, pipeline report incl. **AI risk evaluation** (recommendation badge + risk % + rationale/signals) |
+| Submissions | `pages/SubmissionsListPage.tsx`, `pages/SubmissionDetailPage.tsx`, `hooks/useAdminSubmissions.ts` | Queue, detail (sections + timeline + **downstream outbox**), review actions, pipeline report incl. **AI risk evaluation** |
 | Import | `pages/FormImportPage.tsx`, `hooks/useFormImport.ts` | Import a form from a **file or URL** (mode toggle); shows detected `sourceType` + `providerCode`, extraction status/confidence, then review → accept (creates draft) |
 | Import settings | `pages/ImportProvidersPage.tsx` | List/configure extractor providers: enable/disable, priority, edit `config` JSON; shows whether an implementation bean is available |
+| Notification settings | `pages/NotificationProvidersPage.tsx`, `hooks/useNotifications.ts` | List/configure notification providers + read-only templates |
+| Downstream settings | `pages/DownstreamProvidersPage.tsx`, `hooks/useDownstream.ts` | List/configure downstream connectors; outbox delivery log on submission detail |
+| Service settings | `pages/ServiceProvidersPage.tsx`, `hooks/useServiceProviders.ts` | List/configure external API adapters; service call log on submission detail |
 
 The visual drag-and-drop builder (`FE-PKG-BUILDER`) is currently a placeholder; the JSON editor is the working authoring UI. *Implements:* `US-2.x`, `US-7.x`. *(Visual builder → `US-2.5`, planned.)*
 
@@ -426,7 +452,7 @@ The visual drag-and-drop builder (`FE-PKG-BUILDER`) is currently a placeholder; 
 1. Admin creates form + edits `DRAFT` schema (`AdminFormsController` → `FormCommandService`) → publishes.
 2. Consumer sees it in catalog (`ConsumerFormsController`), optionally via discovery (`M-DISCOVERY` prefill).
 3. Consumer creates draft, saves sections (validated), submits (`ConsumerSubmissionsController`).
-4. Pipeline runs synchronously: VALIDATE → PII_SCRUB → DOWNSTREAM (`M-PIPELINE`, `M-TRANSFORM`) → `PENDING_REVIEW`.
+4. Submit enqueues pipeline (async) or runs inline (sync): VALIDATE → PII_SCRUB → AI_EVALUATE → DOWNSTREAM enqueue → `PENDING_REVIEW` when worker completes.
 5. Admin reviews (`AdminReviewController` → `M-PROCESSING`) → APPROVED/REJECTED/NEEDS_INFO; timeline updated.
 6. Consumer tracks status on "My applications" (`FE-CONSUMER`).
 
@@ -446,7 +472,7 @@ The visual drag-and-drop builder (`FE-PKG-BUILDER`) is currently a placeholder; 
 
 - **Add a form field type:** extend `SectionRenderer` (control) + `SectionValidator` (validation rules) + schema-shape validation in `FormCommandService.validateSchema`.
 - **Add a pipeline step:** add a `PipelineStepType`, implement the step in `SubmissionPipelineService` (or the config-driven `PipelineOrchestrator`), emit an audit event.
-- **Add a downstream connector:** implement in `module-downstream` behind a connector interface (see `ARCHITECTURE.md` §12) and invoke from the DOWNSTREAM step.
+- **Add a downstream connector:** implement `DownstreamConnector` in `module-downstream` (or `module-service-integration` for external deps), register a `downstream_provider` row, enable from **Settings → Downstream**. The pipeline DOWNSTREAM step and outbox dispatcher pick it up automatically.
 - **Add a form-import source/provider:** implement `FormExtractor` (return a unique `code()`), register a `form_import_provider` row (source type + priority + `config_json`) via a new Flyway migration or the Settings page; the router picks it up with no service/controller changes. In-JVM parsers go in `M-FORMIMPORT`; external/AI providers go in `M-SVCINT`.
 - **Add an AI evaluator:** implement the `AiEvaluator` SPI (unique `evaluatorId()`) as a Spring bean, then select it with `pipeline.ai.evaluator=<id>`; `AiEvaluatorRouter` handles selection + the fail-safe fallback. Deterministic evaluators go in `M-PIPELINE`; external/LLM ones in `M-SVCINT`.
 - **Add a notification channel/provider:** implement the `NotificationChannel` SPI (unique `channelId()` matching a `notification_provider` row's `code`, plus its logical `channelType()`), register a `notification_provider` row (channel + priority + `config_json`) via a new Flyway migration or the Settings → Notifications page; `NotificationChannelRouter` picks it up with no service changes. In-JVM channels go in `M-NOTIFY`; external ones (WhatsApp/SMS/hosted email) in `M-SVCINT`. Add templates as `notification_template` rows keyed by (event, channel, locale).
@@ -464,8 +490,9 @@ The visual drag-and-drop builder (`FE-PKG-BUILDER`) is currently a placeholder; 
 | M-IDENTITY | Tenants/users | `module-identity/` |
 | M-FORMDEF | Form definition/versions | `module-form-definition/` |
 | M-FORMIMPORT | Form import (multi-source, SPI + in-JVM extractors) | `module-form-import/` |
-| M-SVCINT | External/AI provider adapters (Ollama vision, WhatsApp Cloud) | `module-service-integration/` |
+| M-SVCINT | Service adapters + external/AI provider beans | `module-service-integration/` |
 | M-NOTIFY | Customer notifications (email/WhatsApp, outbox) | `module-notification/` |
+| M-DOWNSTREAM | Downstream connectors (log/REST + transactional outbox) | `module-downstream/` |
 | M-SUBMISSION | Submissions/storage/audit | `module-submission/` |
 | M-DISCOVERY | Triage/recommendation | `module-discovery/` |
 | M-PIPELINE | Automated pipeline | `module-pipeline/` |

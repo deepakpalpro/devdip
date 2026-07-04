@@ -44,7 +44,7 @@
 | E3 | Form Discovery | Triage → recommend → prefill | M3 | ✅ |
 | E4 | Form Filling & Submission | Render, save, validate, submit | M2/M3 | ✅ |
 | E5 | Consumer Application Lifecycle | List, resume, track status | M3 | ✅ |
-| E6 | Processing Pipeline | Validate → PII scrub → downstream | M4 | ✅ (🟡 real downstream) |
+| E6 | Processing Pipeline | Validate → PII scrub → downstream | M4 | ✅ |
 | E7 | Admin Review & Operations | Queue, review, audit, pipeline report | M4 | ✅ |
 | E8 | Advanced Integrations | Connectors, eventing, AI, notifications | M5 | 🟡 (AI evaluation + notifications done) |
 | E9 | Security & Observability Hardening | OIDC, dashboards, testing, analytics | M5/M6 | ⏳ |
@@ -189,7 +189,7 @@
 > As the *platform*, I want downstream dispatch that never fails the customer's submit.
 - **AC1** Success → `PENDING_REVIEW`, `PIPELINE_COMPLETED`.
 - **AC2** Failure → submission reverts to `SUBMITTED`, execution `FAILED` with error details, `PIPELINE_FAILED` event.
-- *(Real connectors = US-8.1.)*
+- *(Real connectors delivered in US-8.1.)*
 
 ### E7 — Admin Review & Operations (M4) ✅
 
@@ -212,10 +212,25 @@
 
 ### E8 — Advanced Integrations (M5) ⏳
 
-- **US-8.1 — Downstream connectors** ⏳ · `module-downstream` — real Kafka/S3/REST/core-banking delivery + `outbox_event` reliability.
-- **US-8.2 — Event-driven pipeline** ⏳ · `M-PIPELINE` — outbox → message broker → async step workers.
+- **US-8.1 — Downstream connectors** ✅ · `module-downstream`, `M-PIPELINE`, `BFF-ADMIN`, `FE-ADMIN` — deliver the PII-scrubbed submission payload to configurable downstream destinations with a durable transactional outbox.
+  - **AC1** — On pipeline completion, `DownstreamDispatchService` fans out one `downstream_outbox` row (`PENDING`) per enabled provider with an implementation; enqueue runs in the **same transaction** as the pipeline advance.
+  - **AC2** — Providers are **configurable & data-driven** (`downstream_provider` registry + `DownstreamConnector` SPI): `log-sink` (zero-setup default), `rest-webhook` (JDK HttpClient), `kafka-stream`/`s3-archive` (disabled seams). Managed from admin **Settings → Downstream**.
+  - **AC3** — Async dispatch via `@Scheduled` dispatcher; retries with linear backoff → dead-letter (`FAILED`); delivery logged to submission timeline (`DOWNSTREAM_QUEUED/DISPATCHED/FAILED/SKIPPED`).
+  - **AC4** — **Fail-safe:** downstream errors never fail submit/review; payload is always PII-scrubbed; secrets via `secretRef`.
+  - *(Future: Kafka/S3 adapters in `module-service-integration`, per-form routing rules, delivery-status webhooks.)*
+- **US-8.2 — Event-driven pipeline** ✅ · `M-PIPELINE` — submit enqueues `outbox_event`; `@Scheduled` worker runs pipeline async (broker seam via `PipelineEventPublisher`).
+  - **AC1** — Async mode (default): submit returns `SUBMITTED`; `PipelineLifecycleListener` enqueues `PIPELINE_REQUESTED` in outbox after commit; timeline records `PIPELINE_QUEUED`.
+  - **AC2** — `PipelineOutboxDispatcher` polls unpublished rows every 3s, runs `SubmissionPipelineService.process`, marks published; retries with backoff → dead-letter.
+  - **AC3** — Sync fallback: `pipeline.process-mode=sync` runs pipeline inline (prior behavior).
+  - **AC4** — `PipelineEventPublisher` SPI (`log-inprocess` default); Kafka seam ready for separate worker instances.
+  - *(Future: Kafka consumer workers, idempotent consumer tracking.)*
 - **US-8.3 — AI evaluation step** ✅ · `M-PIPELINE`, `module-service-integration` — `AI_EVALUATE` pipeline step scores the sanitized payload via a pluggable `AiEvaluator` (deterministic `heuristic` default; optional local Ollama). Advisory risk score + `APPROVE`/`REVIEW`/`REJECT` + signals, persisted (`submission_ai_evaluation`) and shown in the pipeline report/timeline. **Fail-safe** (degrades to `REVIEW`) and **human-in-the-loop** (never auto-decides). *(Hosted LLMs / per-form prompts → future.)*
-- **US-8.4 — Service-integration adapters** ⏳ · `module-service-integration` — external API adapter registry.
+- **US-8.4 — Service-integration adapters** ✅ · `module-service-integration`, `M-PIPELINE`, `BFF-ADMIN`, `FE-ADMIN` — data-driven external API adapter registry invoked during pipeline SERVICE_CALL.
+  - **AC1** — `ServiceAdapter` SPI + `service_provider` registry + `ServiceAdapterRouter`; fan-out to all enabled providers with implementations on the PII-scrubbed payload.
+  - **AC2** — Providers: `log-service` (default enabled), `rest-api` (JDK HttpClient), `credit-bureau`/`identity-verify` (disabled seams). Admin **Settings → Services**.
+  - **AC3** — Every invocation logged in `service_call_log` + submission timeline (`SERVICE_CALL_*` events). Fail-safe — never fails the pipeline.
+  - **AC4** — `ServiceCallExecutor` pipeline seam in `M-PIPELINE`; implemented by `ServiceIntegrationService` in `M-SVCINT`.
+  - *(Future: Resilience4j circuit breakers, credit-bureau/identity adapter beans, per-form routing overrides.)*
 - **US-8.5 — Customer notifications (email + WhatsApp)** ✅ · `module-notification`, `module-service-integration`, `BFF-ADMIN`, `FE-ADMIN` — notify the customer on submit and on each review decision over email and/or WhatsApp.
   - **AC1** — On submit (`APPLICATION_SUBMITTED`) and on approve/reject/needs-info decisions, an event is raised (`SubmissionLifecycleEvent`) and a notification is enqueued per eligible channel; the transition and each notification are recorded on the submission timeline.
   - **AC2** — Providers are **configurable & data-driven** (`notification_provider` registry + `NotificationChannel` SPI): `log-email` (zero-setup default), `smtp-email` (JavaMailSender), `whatsapp-cloud` (Meta Cloud API, in `M-SVCINT`, disabled until configured). Managed from the admin **Settings → Notifications** page (enable/disable, priority, `config_json`).
@@ -293,10 +308,10 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | US-7.2 | Review queue & detail | M-PROCESSING, BFF-ADMIN, FE-ADMIN | ✅ | S6 |
 | US-7.3 | Review decisions | M-PROCESSING | ✅ | S6 |
 | US-7.4 | Pipeline report | M-PIPELINE, BFF-ADMIN, FE-ADMIN | ✅ | S6 |
-| US-8.1 | Downstream connectors | module-downstream | ⏳ | S7 |
-| US-8.2 | Event-driven pipeline | M-PIPELINE (outbox→broker) | ⏳ | S7 |
+| US-8.1 | Downstream connectors | module-downstream | ✅ | S7 |
+| US-8.2 | Event-driven pipeline | M-PIPELINE (outbox→worker) | ✅ | S7 |
 | US-8.3 | AI evaluation | M-PIPELINE, module-service-integration | ✅ | S6.6 |
-| US-8.4 | Service adapters | module-service-integration | ⏳ | S8 |
+| US-8.4 | Service adapters | module-service-integration | ✅ | S8 |
 | US-8.5 | Customer notifications (email/WhatsApp) | module-notification, module-service-integration, BFF-ADMIN, FE-ADMIN | ✅ | S6.7 |
 | US-9.1 | OIDC auth & RBAC | APP-CORE, M-IDENTITY | ⏳ | S7 |
 | US-9.2 | Observability | M-OBSERV | 🟡 | S8 |
@@ -356,9 +371,9 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | # | Risk / Dependency | Impact | Response |
 |---|-------------------|--------|----------|
 | R1 | Auth still dev-headers | Blocks production | US-9.1 (OIDC) before any real deployment |
-| R2 | Synchronous pipeline | Latency/throughput ceiling | US-8.2 async migration (outbox present) |
+| R2 | Synchronous pipeline | Latency/throughput ceiling | US-8.2 async outbox + worker (default); sync mode available via `pipeline.process-mode=sync` |
 | R3 | Visual builder is a stub | Author friction | US-2.5; JSON editor mitigates now |
-| R4 | Downstream placeholder | No external effects yet | US-8.1 behind existing connector interface (AI eval US-8.3 + notifications US-8.5 now implemented) |
+| R4 | Kafka/S3 downstream adapters | REST + log sink implemented; broker/object-store adapters pending | Add `KafkaDownstreamConnector` / `S3DownstreamConnector` in `module-service-integration` (US-8.1 AC2 seams already seeded) |
 | A1 | Single shared DB acceptable at current scale | — | Read replicas; revisit DB-per-tenant later |
 | D1 | OIDC IdP availability | Gates US-9.1 | Coordinate with security/infra |
 

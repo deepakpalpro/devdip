@@ -1,5 +1,6 @@
 package com.banking.forms.pipeline.application;
 
+import com.banking.forms.downstream.application.DownstreamDispatchService;
 import com.banking.forms.formdefinition.application.FormQueryService;
 import com.banking.forms.formdefinition.application.PublishedFormView;
 import com.banking.forms.pipeline.domain.AiEvaluation;
@@ -10,6 +11,8 @@ import com.banking.forms.pipeline.infrastructure.PipelineExecutionRepository;
 import com.banking.forms.pipeline.infrastructure.SanitizedPayloadRepository;
 import com.banking.forms.pipeline.spi.AiEvaluationContext;
 import com.banking.forms.pipeline.spi.AiEvaluationResult;
+import com.banking.forms.pipeline.spi.ServiceCallContext;
+import com.banking.forms.pipeline.spi.ServiceCallExecutor;
 import com.banking.forms.submission.application.SectionStorageRouter;
 import com.banking.forms.submission.application.SectionValidator;
 import com.banking.forms.submission.application.SubmissionEventRecorder;
@@ -32,17 +35,16 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Runs the automated processing pipeline after a submission is submitted:
- * {@code VALIDATE → PII_SCRUB → AI_EVALUATE → DOWNSTREAM}, advancing the submission
+ * {@code VALIDATE → PII_SCRUB → AI_EVALUATE → SERVICE_CALL → DOWNSTREAM}, advancing the submission
  * {@code SUBMITTED → VALIDATING → PROCESSING → PENDING_REVIEW} and recording every step in the
- * submission audit timeline. Failures are captured (not thrown): the submission is reverted to
- * SUBMITTED and the run is marked FAILED, so a submit request never fails because of the pipeline.
- * The AI step is advisory and fail-safe — it never fails the run (see {@link AiEvaluatorRouter}).
+ * submission audit timeline. In async mode ({@code pipeline.process-mode=async}, the default) the
+ * pipeline is triggered by {@link PipelineOutboxDispatcher} rather than inline on submit.
  */
 @Service
 public class SubmissionPipelineService {
 
     private static final UUID SYSTEM_ACTOR = new UUID(0L, 0L);
-    private static final int TOTAL_STEPS = 4;
+    private static final int TOTAL_STEPS = 5;
 
     private final SubmissionRepository submissionRepository;
     private final SectionStorageRouter sectionStorageRouter;
@@ -54,6 +56,8 @@ public class SubmissionPipelineService {
     private final SanitizedPayloadRepository sanitizedPayloadRepository;
     private final AiEvaluatorRouter aiEvaluatorRouter;
     private final AiEvaluationRepository aiEvaluationRepository;
+    private final DownstreamDispatchService downstreamDispatchService;
+    private final ServiceCallExecutor serviceCallExecutor;
     private final ObjectMapper objectMapper;
 
     public SubmissionPipelineService(
@@ -67,6 +71,8 @@ public class SubmissionPipelineService {
             SanitizedPayloadRepository sanitizedPayloadRepository,
             AiEvaluatorRouter aiEvaluatorRouter,
             AiEvaluationRepository aiEvaluationRepository,
+            DownstreamDispatchService downstreamDispatchService,
+            ServiceCallExecutor serviceCallExecutor,
             ObjectMapper objectMapper) {
         this.submissionRepository = submissionRepository;
         this.sectionStorageRouter = sectionStorageRouter;
@@ -78,6 +84,8 @@ public class SubmissionPipelineService {
         this.sanitizedPayloadRepository = sanitizedPayloadRepository;
         this.aiEvaluatorRouter = aiEvaluatorRouter;
         this.aiEvaluationRepository = aiEvaluationRepository;
+        this.downstreamDispatchService = downstreamDispatchService;
+        this.serviceCallExecutor = serviceCallExecutor;
         this.objectMapper = objectMapper;
     }
 
@@ -89,7 +97,8 @@ public class SubmissionPipelineService {
         }
 
         PipelineExecution execution = executionRepository.save(new PipelineExecution(UUID.randomUUID(), submissionId));
-        record(submissionId, "PIPELINE_STARTED", payload("steps", "VALIDATE,PII_SCRUB,AI_EVALUATE,DOWNSTREAM"));
+        record(submissionId, "PIPELINE_STARTED",
+                payload("steps", "VALIDATE,PII_SCRUB,AI_EVALUATE,SERVICE_CALL,DOWNSTREAM"));
 
         try {
             PublishedFormView form = formQueryService
@@ -114,24 +123,40 @@ public class SubmissionPipelineService {
             record(submissionId, "PII_SCRUBBED", payload("transformedFields", scrub.transformedCount()));
 
             // Step 3 — AI_EVALUATE (advisory risk score on the sanitized payload; fail-safe → REVIEW)
+            String riskRecommendation = null;
+            Double riskScore = null;
             if (aiEvaluatorRouter.isEnabled()) {
                 AiEvaluationContext aiContext = new AiEvaluationContext(
                         submissionId, form.code(), scrub.sanitized(), Map.of("formCode", form.code()));
                 AiEvaluationResult aiResult = aiEvaluatorRouter.evaluate(aiContext);
                 persistAiEvaluation(submissionId, aiResult);
+                riskRecommendation = aiResult.recommendation().name();
+                riskScore = aiResult.riskScore();
                 record(submissionId, "AI_EVALUATED",
                         payload(
-                                "recommendation", aiResult.recommendation().name(),
-                                "riskScore", aiResult.riskScore(),
+                                "recommendation", riskRecommendation,
+                                "riskScore", riskScore,
                                 "evaluator", aiResult.evaluatorId()));
             } else {
                 record(submissionId, "AI_EVALUATION_SKIPPED", payload("reason", "disabled"));
             }
             execution.advanceTo(3);
 
-            // Step 4 — DOWNSTREAM (stubbed dispatch of the sanitized payload)
-            record(submissionId, "DOWNSTREAM_DISPATCHED",
-                    payload("target", "ANALYTICS_STREAM", "fields", scrub.transformedCount()));
+            // Step 4 — SERVICE_CALL (external API adapters on sanitized payload; fail-safe)
+            int serviceInvoked = 0;
+            if (serviceCallExecutor.isEnabled()) {
+                serviceInvoked = serviceCallExecutor.invoke(new ServiceCallContext(
+                        tenantId, submissionId, form.code(), scrub.sanitized(), riskRecommendation, riskScore));
+                record(submissionId, "SERVICE_CALL_INVOKED", payload("invoked", serviceInvoked));
+            } else {
+                record(submissionId, "SERVICE_CALL_SKIPPED", payload("reason", "disabled"));
+            }
+            execution.advanceTo(4);
+
+            // Step 5 — DOWNSTREAM (enqueue sanitized payload to enabled connectors via transactional outbox)
+            int queued = downstreamDispatchService.enqueueForSubmission(
+                    tenantId, submissionId, form.code(), scrub.sanitized(), riskRecommendation, riskScore);
+            record(submissionId, "DOWNSTREAM_ENQUEUED", payload("queued", queued));
             execution.advanceTo(TOTAL_STEPS);
 
             // Automated stages passed → hand off to the manual review queue

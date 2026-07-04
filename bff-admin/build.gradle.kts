@@ -15,4 +15,6 @@ dependencies {
     implementation(project(":module-processing"))
     implementation(project(":module-pipeline"))
     implementation(project(":module-notification"))
+    implementation(project(":module-downstream"))
+    implementation(project(":module-service-integration"))
 }

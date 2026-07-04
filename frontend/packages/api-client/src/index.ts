@@ -126,6 +126,67 @@ export interface NotificationTemplate {
   body: string;
 }
 
+export interface DownstreamProvider {
+  code: string;
+  name: string;
+  connectorType: string;
+  enabled: boolean;
+  priority: number;
+  available: boolean;
+  config: Record<string, unknown> | null;
+}
+
+export interface UpdateDownstreamProviderRequest {
+  enabled: boolean;
+  priority: number;
+  config?: Record<string, unknown> | null;
+}
+
+export interface OutboxEvent {
+  id: string;
+  submissionId: string;
+  eventType: string;
+  formCode: string | null;
+  providerCode: string;
+  connectorType: string;
+  status: string;
+  attempts: number;
+  providerRef: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ServiceProvider {
+  code: string;
+  name: string;
+  adapterType: string;
+  enabled: boolean;
+  priority: number;
+  available: boolean;
+  config: Record<string, unknown> | null;
+}
+
+export interface UpdateServiceProviderRequest {
+  enabled: boolean;
+  priority: number;
+  config?: Record<string, unknown> | null;
+}
+
+export interface ServiceCallLog {
+  id: string;
+  submissionId: string;
+  providerCode: string;
+  adapterType: string;
+  operation: string;
+  formCode: string | null;
+  status: string;
+  providerRef: string | null;
+  error: string | null;
+  durationMs: number | null;
+  createdAt: string;
+}
+
 export interface AcceptedForm {
   jobId: string;
   formId: string;
@@ -366,6 +427,26 @@ export function createApiClient(config: ApiClientConfig = {}) {
       }),
     listNotificationTemplates: () =>
       request<NotificationTemplate[]>('/api/admin/v1/notification-providers/templates', config),
+    listDownstreamProviders: () =>
+      request<DownstreamProvider[]>('/api/admin/v1/downstream-providers', config),
+    updateDownstreamProvider: (code: string, body: UpdateDownstreamProviderRequest) =>
+      request<DownstreamProvider>(`/api/admin/v1/downstream-providers/${encodeURIComponent(code)}`, config, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    listOutboxEvents: (submissionId: string) =>
+      request<OutboxEvent[]>(`/api/admin/v1/downstream-providers/outbox/${submissionId}`, config),
+    listServiceProviders: () =>
+      request<ServiceProvider[]>('/api/admin/v1/service-providers', config),
+    updateServiceProvider: (code: string, body: UpdateServiceProviderRequest) =>
+      request<ServiceProvider>(`/api/admin/v1/service-providers/${encodeURIComponent(code)}`, config, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    listServiceCalls: (submissionId: string) =>
+      request<ServiceCallLog[]>(`/api/admin/v1/service-providers/calls/${submissionId}`, config),
     listAdminSubmissions: () =>
       request<AdminSubmissionSummary[]>('/api/admin/v1/submissions', config),
     getAdminSubmission: (submissionId: string) =>

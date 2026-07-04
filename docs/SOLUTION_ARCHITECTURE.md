@@ -92,7 +92,7 @@ Bounded contexts (modules), each layered `domain → application → infrastruct
 | `module-identity` | Identity | Tenants, users, roles |
 | `module-form-definition` | Form Authoring | Templates, versioning, schema composition |
 | `module-form-import` | Form Import | Multi-source (PDF/CSV/XLS/HTML/URL/image) → draft form via pluggable, DB-configured extractors + human review |
-| `module-service-integration` | External/AI Adapters | Ollama vision form-import provider + Ollama AI-evaluate provider + WhatsApp Cloud notification channel |
+| `module-service-integration` | External/AI Adapters | Service adapter registry + Ollama vision/evaluate + WhatsApp Cloud |
 | `module-submission` | Submissions | Drafts, dual-strategy storage, validation, audit |
 | `module-discovery` | Discovery | Triage rules, recommendation, prefill |
 | `module-pipeline` | Processing | Orchestrate validate/scrub/AI-evaluate/downstream |
@@ -100,7 +100,7 @@ Bounded contexts (modules), each layered `domain → application → infrastruct
 | `module-processing` | Case Review | Manual review state machine |
 | `module-notification` | Notifications | Multi-channel customer notifications (email/WhatsApp) via configurable providers + outbox/async dispatch |
 | `module-observability` | Ops | Metrics/tracing |
-| `module-downstream / -analytics` | (planned) | Connectors, analytics |
+| `module-downstream` | Downstream delivery | Pluggable connectors + transactional outbox for sanitized payload dispatch |
 
 Detailed class-level breakdown: see [`TECHNICAL_GUIDE.md` §5–9](TECHNICAL_GUIDE.md).
 
@@ -129,7 +129,7 @@ Detailed class-level breakdown: see [`TECHNICAL_GUIDE.md` §5–9](TECHNICAL_GUI
 | ADR-2 | BFF per audience | Tailored contracts, independent authz | Two API surfaces to maintain |
 | ADR-3 | Versioned JSON form schemas | No-code/low-friction form change; auditability | Schema validation + composition complexity |
 | ADR-4 | Dual section storage (JSON_BLOB / KEY_VALUE) | Balance agility vs field-level indexing/encryption | Two storage code paths; routing abstraction |
-| ADR-5 | Synchronous pipeline now, event/outbox later | Simplicity first; correctness before scale | Submit latency includes pipeline; async migration pending (outbox table already present) |
+| ADR-5 | Async pipeline via DB outbox + worker (default); sync mode for dev/tests | Submit returns fast; pipeline runs off request path; broker swap localized via SPI | ~3s poll latency before processing starts; sync mode available |
 | ADR-6 | UUID `BINARY(16)` keys | Tenant-safe, non-guessable, merge-friendly | Slightly less human-readable |
 | ADR-7 | Dev headers (`X-Tenant-Id`/`X-Dev-User-Id`) pending OIDC | Unblock development | Must be replaced by OIDC before production (`SecurityConfig` ready) |
 | ADR-8 | springdoc grouped OpenAPI | Self-documenting consumer/admin APIs | Keep annotations current |
@@ -164,14 +164,14 @@ Detailed class-level breakdown: see [`TECHNICAL_GUIDE.md` §5–9](TECHNICAL_GUI
 | Identity (OIDC) | Planned | `SecurityConfig` = OAuth2 resource server (JWT); replace dev headers |
 | Form import — in-JVM extractors (PDF/CSV/XLS/HTML/URL) | ✅ Implemented | `FormExtractor` SPI beans in `module-form-import` (PDFBox/POI/jsoup), selected via `form_import_provider` registry |
 | Form import — AI/vision (image) | 🟡 Local (Ollama) | `OllamaVisionFormExtractor` in `module-service-integration` calls local Ollama (`llava`); hosted-LLM seam (`llm-vision`) disabled pending provider |
-| Downstream (core banking / Kafka / S3 / REST) | Planned | Connector interface in `module-downstream`, invoked by pipeline DOWNSTREAM step; `outbox_event` table for reliable async |
+| Downstream (core banking / Kafka / S3 / REST) | ✅ Implemented (log-sink default + REST webhook; Kafka/S3 seams) | `DownstreamConnector` SPI in `module-downstream`; pipeline DOWNSTREAM step enqueues to `downstream_outbox`; async dispatcher with retries/DLQ |
 | AI evaluator (pipeline) | ✅ / 🟡 | `AiEvaluator` SPI wired as the `AI_EVALUATE` step; deterministic `heuristic` default (implemented), optional local Ollama evaluator; hosted LLMs (OpenAI/Bedrock) planned. Advisory + fail-safe (human-in-the-loop) |
 | Notifications — email | ✅ Implemented | `NotificationChannel` SPI in `module-notification`; `log-email` (default) + `smtp-email` (JavaMailSender); event-triggered, outbox + async dispatch with retries/DLQ |
 | Notifications — WhatsApp | 🟡 Ready (opt-in) | `WhatsAppCloudChannel` (`whatsapp-cloud`) in `module-service-integration` via Meta Cloud API; disabled until `phoneNumberId` + token (`secretRef`) configured; uses approved templates outside the 24h window |
 | Notifications — delivery status | ✅ Implemented | `POST /api/webhooks/notifications/{provider}` updates message → `DELIVERED`/`FAILED` (per-provider signature verification is a hardening item) |
 | Analytics | Planned | `module-analytics` export from sanitized payloads |
 
-**Eventing:** notifications already use an event-driven, DB-outbox + `@Scheduled` dispatcher path (retries + dead-letter); the core processing pipeline remains synchronous with an `outbox_event` table present. Migration path is outbox → message broker → async step workers (event catalog in [`ARCHITECTURE.md` §8](ARCHITECTURE.md)).
+**Eventing:** notifications and downstream delivery use DB-outbox + `@Scheduled` dispatchers. The **processing pipeline** now uses the same pattern: submit enqueues `PIPELINE_REQUESTED` in the generic `outbox_event` table (V15); `PipelineOutboxDispatcher` runs the worker async. `PipelineEventPublisher` SPI provides a broker seam for future Kafka workers.
 
 ---
 
@@ -231,14 +231,15 @@ graph TB
 | Dynamic renderer + section-wise submission + drafts + submit | ✅ Implemented |
 | Consumer application lifecycle (list/resume/status) | ✅ Implemented |
 | Discovery/triage + prefill | ✅ Implemented |
-| Automated pipeline (validate → PII scrub → AI evaluate → downstream) | ✅ Implemented (downstream = placeholder dispatch) |
+| Automated pipeline (validate → PII scrub → AI evaluate → downstream) | ✅ Implemented (downstream via transactional outbox + async dispatch) |
 | AI risk evaluation step (advisory, pluggable, fail-safe) | ✅ Implemented (heuristic default; optional local Ollama; hosted LLMs planned) |
 | Manual review workflow + audit timeline + pipeline report | ✅ Implemented |
 | Form import (multi-source, configurable providers, human-in-the-loop) | ✅ Implemented (PDF/CSV/XLS/HTML/URL in-JVM; image via local Ollama vision) |
 | Customer notifications (email/WhatsApp, configurable providers, outbox + async dispatch) | ✅ Implemented (email `log-email` default + `smtp-email`; WhatsApp Cloud opt-in; retries/DLQ + delivery webhook) |
 | OIDC auth | ⏳ Planned |
-| Real downstream connectors / eventing (outbox→broker) | ⏳ Planned |
-| AI evaluator, service-integration adapters | ⏳ Planned |
+| Real downstream connectors (Kafka/S3 adapters) | ⏳ Planned (REST + log sink done) |
+| Event-driven pipeline (outbox → async worker) | ✅ Implemented (default async; sync fallback; broker SPI seam) |
+| AI evaluator, service-integration adapters | ✅ Implemented (SERVICE_CALL step + adapter registry) |
 | Analytics export | ⏳ Planned |
 | Observability dashboards, load/security testing | ⏳ Planned |
 
