@@ -31,6 +31,11 @@ public class SectionValidator {
         return errors;
     }
 
+    /** True if the schema declares a section with the given key (used to guard draft saves). */
+    public boolean sectionExists(JsonNode schema, String sectionKey) {
+        return findSection(schema, sectionKey) != null;
+    }
+
     public void validateAllSections(JsonNode schema, Map<String, Map<String, Object>> sectionData) {
         JsonNode sections = schema.get("sections");
         if (sections == null || !sections.isArray()) {

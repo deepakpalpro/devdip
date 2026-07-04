@@ -69,7 +69,7 @@
 
 **US-1.3 — Database schema & migrations** · ✅ · DB (`M-*` domain), `APP-CORE`
 > As a *developer*, I want Flyway-managed schema so that DB changes are versioned and repeatable.
-- **AC1** `V1`–`V8` run cleanly on H2 (local) and MySQL.
+- **AC1** `V1`–`V9` run cleanly on H2 (local) and MySQL.
 - **AC2** Core + dynamic-storage + pipeline + seed/sample tables created.
 
 **US-1.4 — Frontend scaffold & design system** · ✅ · `FE-PKG-UI`, `FE-CONSUMER`, `FE-ADMIN`
@@ -143,10 +143,11 @@
 **US-4.3 — Section-wise save (dual storage)** · ✅ · `M-SUBMISSION`
 > As a *customer*, I want to save a section so that progress persists.
 - **AC1** `PUT .../sections/{key}` persists via the form's storage strategy (JSON_BLOB or KEY_VALUE) transparently.
+- **AC2** Saves are **partial** — an incomplete section can be saved (draft), so long multi-section forms can be left and resumed.
 
 **US-4.4 — Server-side validation** · ✅ · `M-SUBMISSION`
 > As a *compliance owner*, I want server validation so that invalid data can't be saved/submitted.
-- **AC1** Section save validates that section; submit validates all sections (incl. missing) → 400 with field errors.
+- **AC1** Per-section draft save accepts partial data (structure only, no required-field gate); **submit** validates all sections (incl. missing) → 400 with field errors, and the wizard jumps to the first incomplete section.
 
 **US-4.5 — Submit application** · ✅ · `M-SUBMISSION`, `M-PIPELINE`, `BFF-CONSUMER`
 > As a *customer*, I want to submit so that the bank processes my application.
@@ -167,6 +168,7 @@
 **US-5.2 — Resume a draft** · ✅ · `M-SUBMISSION`, `FE-CONSUMER`
 > As a *customer*, I want to resume a draft so that I continue where I left off.
 - **AC1** Opening `?submission={id}` loads server-stored draft data (server state preferred over local).
+- **AC2** Resume restores the last section position (`current_section_key`, migration `V9`), landing the user on the page they left off — including partially-filled sections.
 
 **US-5.3 — Track application status** · ✅ · `FE-CONSUMER`
 > As a *customer*, I want a persistent status page so that I know where my application stands.

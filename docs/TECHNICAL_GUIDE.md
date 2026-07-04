@@ -36,7 +36,7 @@ npm run dev:admin                        # http://localhost:5174
 | Layer | Technology |
 |-------|-----------|
 | Backend | Java 21, Spring Boot 3.x, Spring Web, Spring Data JPA/Hibernate, Bean Validation |
-| Migrations | Flyway (`V1`–`V8`) |
+| Migrations | Flyway (`V1`–`V9`) |
 | Database | MySQL 8.x (prod), H2 in MySQL mode (local/tests) |
 | API docs | springdoc-openapi (grouped: consumer + admin) |
 | Frontend | React 18, TypeScript, Vite 6, React Router, TanStack Query |
@@ -163,7 +163,7 @@ Owns drafts, submitted applications, per-section value storage (dual strategy), 
 
 **Key services**
 - `SubmissionService.createDraft(tenant, user, formCode[, prefill])` — creates `DRAFT`, optionally seeds prefill (from discovery) without required-field validation.
-- `saveSection` — validates one section against schema (`SectionValidator`) then persists via the strategy.
+- `saveSection` — **partial draft save**: persists one section via the storage strategy without required-field validation (only checks the section exists) and records the resume position (`currentSectionKey`). Completeness is enforced on `submit`, not here — so long forms can be left incomplete and resumed.
 - `submit` — validates **all** sections (incl. missing), stamps idempotency key + `submitted_at`, records `SUBMITTED` event.
 - `listSubmissions(tenant)` — admin list (all applicants). `listSubmissions(tenant, user)` — consumer "my applications" list.
 - `getSubmission` / `getTimeline` — detail + audit events.
@@ -282,6 +282,7 @@ Flyway migrations in `app/src/main/resources/db/migration/`:
 | `V6` | `submission_sanitized_payload` (pipeline output) |
 | `V7` | Sample submissions across all 8 statuses |
 | `V8` | More sample submissions + a FAILED-pipeline example |
+| `V9` | Draft resume progress: `current_section_key` on `submission` |
 
 **Central tables:** `form_definition` → `form_version` (1:N, unique per version number). `submission` → `submission_section` → `submission_field_value`. `submission` → `submission_event` (append-only audit). `submission` → `pipeline_execution` + `submission_sanitized_payload`. IDs are `BINARY(16)` UUIDs. Detailed column-level design lives in [`ARCHITECTURE.md` §5](ARCHITECTURE.md).
 
@@ -334,7 +335,7 @@ Shared presentational components (`AppShell` with nav slot, `PageHeader`, `Butto
 | Shell/routes | `App.tsx`, `main.tsx` | Router + nav (Catalog / My applications) |
 | Catalog | `pages/FormCatalog.tsx`, `hooks/useConsumerForms.ts` | Browse & start forms |
 | Discovery | `pages/DiscoveryWizardPage.tsx`, `hooks/useDiscovery.ts` | Triage wizard → recommendation → prefill |
-| Fill/submit | `pages/SubmissionWizardPage.tsx`, `hooks/useSubmission.ts`, `components/SubmissionReview.tsx` | Section stepper, per-section save, review, submit, **server-backed resume** via `?submission=` |
+| Fill/submit | `pages/SubmissionWizardPage.tsx`, `hooks/useSubmission.ts`, `components/SubmissionReview.tsx` | Section stepper, **partial per-page save** (next/back), review, submit; **server-backed resume** via `?submission=` restoring both the saved data and the last section position |
 | My applications | `pages/MyApplicationsPage.tsx` | List of the user's applications w/ status badges + continue/view actions |
 | Status | `pages/ApplicationStatusPage.tsx`, `lib/submissionStatus.ts` | Persistent per-application status + read-only summary |
 

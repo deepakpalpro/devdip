@@ -90,6 +90,7 @@ public class ConsumerSubmissionsController {
                     detail.formCode(),
                     detail.formName(),
                     schema,
+                    detail.currentSectionKey(),
                     detail.sectionData());
         } catch (SubmissionNotFoundException ex) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage());
@@ -103,7 +104,7 @@ public class ConsumerSubmissionsController {
             @PathVariable("sectionKey") String sectionKey,
             @Valid @RequestBody SaveSectionRequest request) {
         try {
-            submissionService.saveSection(tenantId, id, sectionKey, request.data());
+            submissionService.saveSection(tenantId, id, sectionKey, request.data(), request.resumeSectionKey());
             return ResponseEntity.noContent().build();
         } catch (SubmissionNotFoundException ex) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage());
@@ -133,7 +134,7 @@ public class ConsumerSubmissionsController {
 
     public record CreateSubmissionRequest(@NotBlank String formCode, UUID discoverySessionId) {}
 
-    public record SaveSectionRequest(@NotNull Map<String, Object> data) {}
+    public record SaveSectionRequest(@NotNull Map<String, Object> data, String resumeSectionKey) {}
 
     public record SubmissionCreatedResponse(UUID submissionId, String status, String formCode, JsonNode schema) {}
 
@@ -143,6 +144,7 @@ public class ConsumerSubmissionsController {
             String formCode,
             String formName,
             JsonNode schema,
+            String currentSectionKey,
             Map<String, Map<String, Object>> sectionData) {}
 
     public record SubmitResponse(UUID submissionId, String status) {}
