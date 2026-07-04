@@ -8,4 +8,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface SubmissionEventRepository extends JpaRepository<SubmissionEvent, Long> {
 
     List<SubmissionEvent> findBySubmissionIdOrderByIdAsc(UUID submissionId);
+
+    void deleteBySubmissionId(UUID submissionId);
 }

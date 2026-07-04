@@ -5,6 +5,7 @@ import com.banking.forms.formdefinition.application.FormNotFoundException;
 import com.banking.forms.formdefinition.application.FormSchemaException;
 import com.banking.forms.formimport.application.FormImportException;
 import com.banking.forms.formimport.application.FormImportNotFoundException;
+import com.banking.forms.notification.application.NotificationException;
 import com.banking.forms.submission.application.SubmissionNotFoundException;
 import com.banking.forms.submission.application.SubmissionValidationException;
 import org.springframework.http.HttpStatus;
@@ -47,6 +48,11 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(FormImportException.class)
     ResponseEntity<SimpleError> handleImport(FormImportException ex) {
+        return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
+    }
+
+    @ExceptionHandler(NotificationException.class)
+    ResponseEntity<SimpleError> handleNotification(NotificationException ex) {
         return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
     }
 

@@ -2,10 +2,14 @@ package com.banking.forms.pipeline.application;
 
 import com.banking.forms.formdefinition.application.FormQueryService;
 import com.banking.forms.formdefinition.application.PublishedFormView;
+import com.banking.forms.pipeline.domain.AiEvaluation;
 import com.banking.forms.pipeline.domain.PipelineExecution;
 import com.banking.forms.pipeline.domain.SanitizedPayload;
+import com.banking.forms.pipeline.infrastructure.AiEvaluationRepository;
 import com.banking.forms.pipeline.infrastructure.PipelineExecutionRepository;
 import com.banking.forms.pipeline.infrastructure.SanitizedPayloadRepository;
+import com.banking.forms.pipeline.spi.AiEvaluationContext;
+import com.banking.forms.pipeline.spi.AiEvaluationResult;
 import com.banking.forms.submission.application.SectionStorageRouter;
 import com.banking.forms.submission.application.SectionValidator;
 import com.banking.forms.submission.application.SubmissionEventRecorder;
@@ -28,16 +32,17 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Runs the automated processing pipeline after a submission is submitted:
- * {@code VALIDATE → PII_SCRUB → DOWNSTREAM}, advancing the submission
+ * {@code VALIDATE → PII_SCRUB → AI_EVALUATE → DOWNSTREAM}, advancing the submission
  * {@code SUBMITTED → VALIDATING → PROCESSING → PENDING_REVIEW} and recording every step in the
  * submission audit timeline. Failures are captured (not thrown): the submission is reverted to
  * SUBMITTED and the run is marked FAILED, so a submit request never fails because of the pipeline.
+ * The AI step is advisory and fail-safe — it never fails the run (see {@link AiEvaluatorRouter}).
  */
 @Service
 public class SubmissionPipelineService {
 
     private static final UUID SYSTEM_ACTOR = new UUID(0L, 0L);
-    private static final int TOTAL_STEPS = 3;
+    private static final int TOTAL_STEPS = 4;
 
     private final SubmissionRepository submissionRepository;
     private final SectionStorageRouter sectionStorageRouter;
@@ -47,6 +52,8 @@ public class SubmissionPipelineService {
     private final PiiScrubber piiScrubber;
     private final PipelineExecutionRepository executionRepository;
     private final SanitizedPayloadRepository sanitizedPayloadRepository;
+    private final AiEvaluatorRouter aiEvaluatorRouter;
+    private final AiEvaluationRepository aiEvaluationRepository;
     private final ObjectMapper objectMapper;
 
     public SubmissionPipelineService(
@@ -58,6 +65,8 @@ public class SubmissionPipelineService {
             PiiScrubber piiScrubber,
             PipelineExecutionRepository executionRepository,
             SanitizedPayloadRepository sanitizedPayloadRepository,
+            AiEvaluatorRouter aiEvaluatorRouter,
+            AiEvaluationRepository aiEvaluationRepository,
             ObjectMapper objectMapper) {
         this.submissionRepository = submissionRepository;
         this.sectionStorageRouter = sectionStorageRouter;
@@ -67,6 +76,8 @@ public class SubmissionPipelineService {
         this.piiScrubber = piiScrubber;
         this.executionRepository = executionRepository;
         this.sanitizedPayloadRepository = sanitizedPayloadRepository;
+        this.aiEvaluatorRouter = aiEvaluatorRouter;
+        this.aiEvaluationRepository = aiEvaluationRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -78,7 +89,7 @@ public class SubmissionPipelineService {
         }
 
         PipelineExecution execution = executionRepository.save(new PipelineExecution(UUID.randomUUID(), submissionId));
-        record(submissionId, "PIPELINE_STARTED", payload("steps", "VALIDATE,PII_SCRUB,DOWNSTREAM"));
+        record(submissionId, "PIPELINE_STARTED", payload("steps", "VALIDATE,PII_SCRUB,AI_EVALUATE,DOWNSTREAM"));
 
         try {
             PublishedFormView form = formQueryService
@@ -102,7 +113,23 @@ public class SubmissionPipelineService {
             execution.advanceTo(2);
             record(submissionId, "PII_SCRUBBED", payload("transformedFields", scrub.transformedCount()));
 
-            // Step 3 — DOWNSTREAM (stubbed dispatch of the sanitized payload)
+            // Step 3 — AI_EVALUATE (advisory risk score on the sanitized payload; fail-safe → REVIEW)
+            if (aiEvaluatorRouter.isEnabled()) {
+                AiEvaluationContext aiContext = new AiEvaluationContext(
+                        submissionId, form.code(), scrub.sanitized(), Map.of("formCode", form.code()));
+                AiEvaluationResult aiResult = aiEvaluatorRouter.evaluate(aiContext);
+                persistAiEvaluation(submissionId, aiResult);
+                record(submissionId, "AI_EVALUATED",
+                        payload(
+                                "recommendation", aiResult.recommendation().name(),
+                                "riskScore", aiResult.riskScore(),
+                                "evaluator", aiResult.evaluatorId()));
+            } else {
+                record(submissionId, "AI_EVALUATION_SKIPPED", payload("reason", "disabled"));
+            }
+            execution.advanceTo(3);
+
+            // Step 4 — DOWNSTREAM (stubbed dispatch of the sanitized payload)
             record(submissionId, "DOWNSTREAM_DISPATCHED",
                     payload("target", "ANALYTICS_STREAM", "fields", scrub.transformedCount()));
             execution.advanceTo(TOTAL_STEPS);
@@ -137,7 +164,11 @@ public class SubmissionPipelineService {
         Map<String, Map<String, Object>> payload = sanitized == null ? null : readSections(sanitized.getPayloadJson());
         List<TransformedFieldView> transformed =
                 sanitized == null ? List.of() : readTransformed(sanitized.getTransformedJson());
-        return new PipelineReportView(executionView, payload, transformed);
+        AiEvaluationView aiEvaluation = aiEvaluationRepository
+                .findBySubmissionId(submissionId)
+                .map(this::toAiView)
+                .orElse(null);
+        return new PipelineReportView(executionView, payload, transformed, aiEvaluation);
     }
 
     private Submission loadOwned(UUID tenantId, UUID submissionId) {
@@ -156,6 +187,53 @@ public class SubmissionPipelineService {
                         existing -> existing.update(payloadJson, transformedJson),
                         () -> sanitizedPayloadRepository.save(
                                 new SanitizedPayload(UUID.randomUUID(), submissionId, payloadJson, transformedJson)));
+    }
+
+    private void persistAiEvaluation(UUID submissionId, AiEvaluationResult result) {
+        String signalsJson = writeJson(result.signals());
+        aiEvaluationRepository
+                .findBySubmissionId(submissionId)
+                .ifPresentOrElse(
+                        existing -> existing.update(
+                                result.evaluatorId(),
+                                result.model(),
+                                result.riskScore(),
+                                result.recommendation().name(),
+                                result.rationale(),
+                                signalsJson,
+                                result.processingTimeMs()),
+                        () -> aiEvaluationRepository.save(new AiEvaluation(
+                                UUID.randomUUID(),
+                                submissionId,
+                                result.evaluatorId(),
+                                result.model(),
+                                result.riskScore(),
+                                result.recommendation().name(),
+                                result.rationale(),
+                                signalsJson,
+                                result.processingTimeMs())));
+    }
+
+    private AiEvaluationView toAiView(AiEvaluation evaluation) {
+        return new AiEvaluationView(
+                evaluation.getEvaluatorId(),
+                evaluation.getModel(),
+                evaluation.getRiskScore(),
+                evaluation.getRecommendation(),
+                evaluation.getRationale(),
+                readSignals(evaluation.getSignalsJson()),
+                evaluation.getCreatedAt());
+    }
+
+    private Map<String, Object> readSignals(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() {});
+        } catch (Exception ex) {
+            return Map.of();
+        }
     }
 
     private PipelineExecutionView toExecutionView(PipelineExecution execution) {

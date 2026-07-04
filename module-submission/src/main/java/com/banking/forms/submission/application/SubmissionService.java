@@ -27,6 +27,7 @@ public class SubmissionService {
     private final SubmissionEventRecorder eventRecorder;
     private final SubmissionEventRepository eventRepository;
     private final ObjectMapper objectMapper;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     public SubmissionService(
             SubmissionRepository submissionRepository,
@@ -35,7 +36,8 @@ public class SubmissionService {
             SectionStorageRouter sectionStorageRouter,
             SubmissionEventRecorder eventRecorder,
             SubmissionEventRepository eventRepository,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            org.springframework.context.ApplicationEventPublisher eventPublisher) {
         this.submissionRepository = submissionRepository;
         this.formQueryService = formQueryService;
         this.sectionValidator = sectionValidator;
@@ -43,6 +45,7 @@ public class SubmissionService {
         this.eventRecorder = eventRecorder;
         this.eventRepository = eventRepository;
         this.objectMapper = objectMapper;
+        this.eventPublisher = eventPublisher;
     }
 
     public Submission createDraft(UUID tenantId, UUID userId, String formCode) {
@@ -158,7 +161,35 @@ public class SubmissionService {
                 "SUBMITTED",
                 Map.of("from", SubmissionStatus.DRAFT.name(), "to", SubmissionStatus.SUBMITTED.name()),
                 saved.getUserId());
+        eventPublisher.publishEvent(new com.banking.forms.submission.application.event.SubmissionLifecycleEvent(
+                saved.getTenantId(),
+                saved.getId(),
+                saved.getUserId(),
+                saved.getFormVersionId(),
+                SubmissionStatus.DRAFT,
+                SubmissionStatus.SUBMITTED));
         return saved;
+    }
+
+    /**
+     * Discards a draft application: removes its section data and audit events, then deletes the
+     * submission itself. Restricted to the owner and to {@code DRAFT} status — submitted/in-review
+     * applications are immutable records and cannot be deleted. Child rows are removed before the
+     * parent to respect foreign keys.
+     */
+    public void discardDraft(UUID tenantId, UUID submissionId, UUID userId) {
+        var submission = requireSubmission(tenantId, submissionId);
+        if (userId != null && !userId.equals(submission.getUserId())) {
+            // Do not reveal other applicants' submissions.
+            throw new SubmissionNotFoundException(submissionId);
+        }
+        if (submission.getStatus() != SubmissionStatus.DRAFT) {
+            throw new SubmissionValidationException("Only draft applications can be discarded");
+        }
+        var form = requireForm(submission.getFormVersionId());
+        sectionStorageRouter.resolve(form.storageStrategy()).deleteSections(submissionId);
+        eventRepository.deleteBySubmissionId(submissionId);
+        submissionRepository.delete(submission);
     }
 
     @Transactional(readOnly = true)

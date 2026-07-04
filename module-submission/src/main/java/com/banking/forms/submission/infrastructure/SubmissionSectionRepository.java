@@ -11,4 +11,6 @@ public interface SubmissionSectionRepository extends JpaRepository<SubmissionSec
     List<SubmissionSection> findBySubmissionId(UUID submissionId);
 
     Optional<SubmissionSection> findBySubmissionIdAndSectionKey(UUID submissionId, String sectionKey);
+
+    void deleteBySubmissionId(UUID submissionId);
 }

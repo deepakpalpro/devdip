@@ -4,6 +4,7 @@ import { FormsListPage } from './pages/FormsListPage';
 import { FormBuilderPage } from './pages/FormBuilderPage';
 import { FormImportPage } from './pages/FormImportPage';
 import { ImportProvidersPage } from './pages/ImportProvidersPage';
+import { NotificationProvidersPage } from './pages/NotificationProvidersPage';
 import { SubmissionsListPage } from './pages/SubmissionsListPage';
 import { SubmissionDetailPage } from './pages/SubmissionDetailPage';
 
@@ -20,7 +21,10 @@ function AdminNav() {
         Submissions
       </NavLink>
       <NavLink to="/settings/import-providers" className={({ isActive }) => (isActive ? 'bf-nav-active' : '')}>
-        Settings
+        Import providers
+      </NavLink>
+      <NavLink to="/settings/notification-providers" className={({ isActive }) => (isActive ? 'bf-nav-active' : '')}>
+        Notifications
       </NavLink>
     </nav>
   );
@@ -64,6 +68,18 @@ export function App() {
                 description="Choose and configure which engine extracts each source type. External providers plug in via module-service-integration."
               />
               <ImportProvidersPage />
+            </>
+          }
+        />
+        <Route
+          path="/settings/notification-providers"
+          element={
+            <>
+              <PageHeader
+                title="Notification providers"
+                description="Choose and configure which adapter delivers each channel (email, WhatsApp). External providers plug in via module-service-integration."
+              />
+              <NotificationProvidersPage />
             </>
           }
         />

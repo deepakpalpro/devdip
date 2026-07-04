@@ -92,14 +92,15 @@ Bounded contexts (modules), each layered `domain → application → infrastruct
 | `module-identity` | Identity | Tenants, users, roles |
 | `module-form-definition` | Form Authoring | Templates, versioning, schema composition |
 | `module-form-import` | Form Import | Multi-source (PDF/CSV/XLS/HTML/URL/image) → draft form via pluggable, DB-configured extractors + human review |
-| `module-service-integration` | External/AI Adapters | Ollama vision form-import provider (+ future AI-evaluate adapter) |
+| `module-service-integration` | External/AI Adapters | Ollama vision form-import provider + Ollama AI-evaluate provider + WhatsApp Cloud notification channel |
 | `module-submission` | Submissions | Drafts, dual-strategy storage, validation, audit |
 | `module-discovery` | Discovery | Triage rules, recommendation, prefill |
-| `module-pipeline` | Processing | Orchestrate validate/scrub/downstream |
+| `module-pipeline` | Processing | Orchestrate validate/scrub/AI-evaluate/downstream |
 | `module-transformation` | Data Protection | PII scrubbing/tokenization |
 | `module-processing` | Case Review | Manual review state machine |
+| `module-notification` | Notifications | Multi-channel customer notifications (email/WhatsApp) via configurable providers + outbox/async dispatch |
 | `module-observability` | Ops | Metrics/tracing |
-| `module-notification / -downstream / -analytics` | (planned) | Notifications, connectors, analytics |
+| `module-downstream / -analytics` | (planned) | Connectors, analytics |
 
 Detailed class-level breakdown: see [`TECHNICAL_GUIDE.md` §5–9](TECHNICAL_GUIDE.md).
 
@@ -135,6 +136,11 @@ Detailed class-level breakdown: see [`TECHNICAL_GUIDE.md` §5–9](TECHNICAL_GUI
 | ADR-9 | Configurable, DB-driven form-import providers (SPI + `form_import_provider` registry) instead of hard-coded source enums | Add sources/providers (PDF/CSV/XLS/HTML/image/AI) without code changes; per-tenant/ops tuning via priority + `config_json` | Router/registry indirection; must guard "seeded but no bean available" |
 | ADR-10 | Local Ollama vision (`llava`) for the image source; in-JVM parsers default; hosted-LLM seam disabled by default | On-device inference (no data egress), zero-setup default path, pluggable to hosted LLMs later | Ollama is an external runtime (Docker), CPU inference is slow; image downscale + generous timeouts needed |
 | ADR-11 | Extraction output is a reviewed proposal, never auto-published | Safety/quality gate for AI-generated schemas; auditable | Extra admin step before a form goes live |
+| ADR-12 | Pluggable `AiEvaluator` seam for the `AI_EVALUATE` step, deterministic heuristic as default (Ollama/LLM opt-in via config) | Demoable/testable with zero external deps; swap in LLMs without touching the pipeline | Two provider locations (`M-PIPELINE` built-in, `M-SVCINT` external); config-selected rather than DB-registry (unlike form import) |
+| ADR-13 | AI evaluation is advisory + fail-safe (degrades to `REVIEW`, never auto-decides) | Human-in-the-loop for regulated decisions; a submit never fails on AI | AI cannot straight-through-process approvals (by design) |
+| ADR-14 | Configurable, DB-driven notification providers (`NotificationChannel` SPI + `notification_provider` registry) — same pattern as form-import | Add channels/providers (email/WhatsApp/SMS) without code changes; per-ops enable + priority + `config_json`; in-JVM `log-email` default keeps it zero-setup | Router/registry indirection; must guard "enabled but no bean" |
+| ADR-15 | Notifications triggered by a domain event (`SubmissionLifecycleEvent`) consumed after commit, delivered via a DB outbox drained by a `@Scheduled` dispatcher | Decouples submission/review from delivery; async + retries + DLQ without a broker; broker swap is localized later | Poll latency (seconds); external send currently inside the per-message tx |
+| ADR-16 | Notifications advisory + fail-safe; recipients masked; secrets via `secretRef`; consent-gated | A notification failure never affects submit/review; PII-safe logs; regulated-consent ready | Extra timeline noise; consent depends on the form capturing a consent field |
 
 ---
 
@@ -144,7 +150,9 @@ Detailed class-level breakdown: see [`TECHNICAL_GUIDE.md` §5–9](TECHNICAL_GUI
 - **Form model:** `form_definition` 1:N `form_version` (`DRAFT`/`PUBLISHED`/`DEPRECATED`); publishing auto-deprecates the prior published version.
 - **Submission model:** `submission` → `submission_section` → `submission_field_value` (KEY_VALUE) or JSON blob (JSON_BLOB); `submission_event` append-only audit; `pipeline_execution` + `submission_sanitized_payload` for processing.
 - **Form-import model:** `form_import_job` (source type, provider code, source hash for dedup, extracted/mapped JSON, lifecycle status) + `form_import_provider` (configurable extractor registry: code, source type, enabled, priority, `config_json`).
-- **Migrations:** Flyway `V1`–`V11` (schema + seed + sample data + draft resume progress + form-import job/provider). See [`ARCHITECTURE.md` §5](ARCHITECTURE.md) and [`TECHNICAL_GUIDE.md` §7](TECHNICAL_GUIDE.md).
+- **AI evaluation model:** `submission_ai_evaluation` (advisory risk score + recommendation + explainability signals; one row per submission), produced by the pipeline `AI_EVALUATE` step from the sanitized payload.
+- **Notification model:** `notification_provider` (channel registry: code, channel, enabled, priority, `config_json`) + `notification_template` (per event/channel/locale) + `notification_message` (durable outbox + delivery log: recipient, status `PENDING/SENT/DELIVERED/FAILED/SKIPPED`, attempts, provider message id).
+- **Migrations:** Flyway `V1`–`V13` (schema + seed + sample data + draft resume progress + form-import job/provider + AI evaluation + notifications). See [`ARCHITECTURE.md` §5](ARCHITECTURE.md) and [`TECHNICAL_GUIDE.md` §7](TECHNICAL_GUIDE.md).
 - **Encryption:** field-level encryption is enabled by the KEY_VALUE path (`is_encrypted` per field) + PII registry; at-rest DB encryption is a deployment concern.
 
 ---
@@ -157,11 +165,13 @@ Detailed class-level breakdown: see [`TECHNICAL_GUIDE.md` §5–9](TECHNICAL_GUI
 | Form import — in-JVM extractors (PDF/CSV/XLS/HTML/URL) | ✅ Implemented | `FormExtractor` SPI beans in `module-form-import` (PDFBox/POI/jsoup), selected via `form_import_provider` registry |
 | Form import — AI/vision (image) | 🟡 Local (Ollama) | `OllamaVisionFormExtractor` in `module-service-integration` calls local Ollama (`llava`); hosted-LLM seam (`llm-vision`) disabled pending provider |
 | Downstream (core banking / Kafka / S3 / REST) | Planned | Connector interface in `module-downstream`, invoked by pipeline DOWNSTREAM step; `outbox_event` table for reliable async |
-| AI evaluator (pipeline) | Planned | Adapter interface (`module-service-integration`), pipeline `AI_EVALUATE` step |
-| Notifications | Planned | `module-notification`, triggered by events |
+| AI evaluator (pipeline) | ✅ / 🟡 | `AiEvaluator` SPI wired as the `AI_EVALUATE` step; deterministic `heuristic` default (implemented), optional local Ollama evaluator; hosted LLMs (OpenAI/Bedrock) planned. Advisory + fail-safe (human-in-the-loop) |
+| Notifications — email | ✅ Implemented | `NotificationChannel` SPI in `module-notification`; `log-email` (default) + `smtp-email` (JavaMailSender); event-triggered, outbox + async dispatch with retries/DLQ |
+| Notifications — WhatsApp | 🟡 Ready (opt-in) | `WhatsAppCloudChannel` (`whatsapp-cloud`) in `module-service-integration` via Meta Cloud API; disabled until `phoneNumberId` + token (`secretRef`) configured; uses approved templates outside the 24h window |
+| Notifications — delivery status | ✅ Implemented | `POST /api/webhooks/notifications/{provider}` updates message → `DELIVERED`/`FAILED` (per-provider signature verification is a hardening item) |
 | Analytics | Planned | `module-analytics` export from sanitized payloads |
 
-**Eventing:** an `outbox_event` table exists; the current pipeline is synchronous. Migration path is outbox → message broker → async step workers (event catalog in [`ARCHITECTURE.md` §8](ARCHITECTURE.md)).
+**Eventing:** notifications already use an event-driven, DB-outbox + `@Scheduled` dispatcher path (retries + dead-letter); the core processing pipeline remains synchronous with an `outbox_event` table present. Migration path is outbox → message broker → async step workers (event catalog in [`ARCHITECTURE.md` §8](ARCHITECTURE.md)).
 
 ---
 
@@ -221,13 +231,15 @@ graph TB
 | Dynamic renderer + section-wise submission + drafts + submit | ✅ Implemented |
 | Consumer application lifecycle (list/resume/status) | ✅ Implemented |
 | Discovery/triage + prefill | ✅ Implemented |
-| Automated pipeline (validate → PII scrub → downstream) | ✅ Implemented (downstream = placeholder dispatch) |
+| Automated pipeline (validate → PII scrub → AI evaluate → downstream) | ✅ Implemented (downstream = placeholder dispatch) |
+| AI risk evaluation step (advisory, pluggable, fail-safe) | ✅ Implemented (heuristic default; optional local Ollama; hosted LLMs planned) |
 | Manual review workflow + audit timeline + pipeline report | ✅ Implemented |
 | Form import (multi-source, configurable providers, human-in-the-loop) | ✅ Implemented (PDF/CSV/XLS/HTML/URL in-JVM; image via local Ollama vision) |
+| Customer notifications (email/WhatsApp, configurable providers, outbox + async dispatch) | ✅ Implemented (email `log-email` default + `smtp-email`; WhatsApp Cloud opt-in; retries/DLQ + delivery webhook) |
 | OIDC auth | ⏳ Planned |
 | Real downstream connectors / eventing (outbox→broker) | ⏳ Planned |
 | AI evaluator, service-integration adapters | ⏳ Planned |
-| Notifications, analytics export | ⏳ Planned |
+| Analytics export | ⏳ Planned |
 | Observability dashboards, load/security testing | ⏳ Planned |
 
 *(Delivery mapping in [`PROJECT_MANAGEMENT.md`](PROJECT_MANAGEMENT.md).)*

@@ -16,4 +16,7 @@ public interface SectionStorageStrategy {
     void saveSection(UUID submissionId, String sectionKey, Map<String, Object> data);
 
     Map<String, Map<String, Object>> loadAllSections(UUID submissionId);
+
+    /** Removes all persisted section data for a submission (used when a draft is discarded). */
+    void deleteSections(UUID submissionId);
 }

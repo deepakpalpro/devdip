@@ -21,6 +21,8 @@ const EVENT_LABELS: Record<string, string> = {
   PIPELINE_STARTED: 'Automated pipeline started',
   VALIDATED: 'Validation passed',
   PII_SCRUBBED: 'PII scrubbed',
+  AI_EVALUATED: 'AI risk evaluation',
+  AI_EVALUATION_SKIPPED: 'AI evaluation skipped',
   DOWNSTREAM_DISPATCHED: 'Dispatched downstream',
   PIPELINE_COMPLETED: 'Automated pipeline completed',
   PIPELINE_FAILED: 'Automated pipeline failed',
@@ -28,6 +30,11 @@ const EVENT_LABELS: Record<string, string> = {
   APPROVED: 'Approved',
   REJECTED: 'Rejected',
   INFO_REQUESTED: 'More information requested',
+  NOTIFICATION_QUEUED: 'Notification queued',
+  NOTIFICATION_SENT: 'Notification sent',
+  NOTIFICATION_DELIVERED: 'Notification delivered',
+  NOTIFICATION_FAILED: 'Notification failed',
+  NOTIFICATION_SKIPPED: 'Notification skipped',
 };
 
 interface ReviewButton {
@@ -123,8 +130,46 @@ function pipelineBadgeClass(status: string) {
   return 'bf-badge bf-badge-warning';
 }
 
+function recommendationBadgeClass(recommendation: string) {
+  if (recommendation === 'APPROVE') return 'bf-badge bf-badge-success';
+  if (recommendation === 'REJECT') return 'bf-badge bf-badge-danger';
+  return 'bf-badge bf-badge-warning';
+}
+
+function AiEvaluationBlock({ ai }: { ai: NonNullable<PipelineReport['aiEvaluation']> }) {
+  const riskPct = Math.round(ai.riskScore * 100);
+  const signalEntries = Object.entries(ai.signals ?? {});
+  return (
+    <div className="submission-ai-eval">
+      <div className="submission-field-label">AI risk evaluation (advisory)</div>
+      <div className="submission-ai-eval-head">
+        <span className={recommendationBadgeClass(ai.recommendation)}>{ai.recommendation}</span>
+        <span className="submission-ai-eval-score">Risk {riskPct}%</span>
+        <span className="submission-ai-eval-meta">
+          {ai.evaluatorId}
+          {ai.model ? ` · ${ai.model}` : ''}
+        </span>
+      </div>
+      {ai.rationale ? <p className="submission-ai-eval-rationale">{ai.rationale}</p> : null}
+      {signalEntries.length > 0 ? (
+        <details className="submission-ai-eval-signals">
+          <summary>Signals</summary>
+          <ul className="submission-pipeline-list">
+            {signalEntries.map(([key, value]) => (
+              <li key={key}>
+                <code>{key}</code>
+                <span className="bf-badge">{String(value)}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 function PipelineCard({ report }: { report: PipelineReport }) {
-  const { execution, sanitizedPayload, transformedFields } = report;
+  const { execution, sanitizedPayload, transformedFields, aiEvaluation } = report;
   if (!execution) {
     return null;
   }
@@ -140,6 +185,8 @@ function PipelineCard({ report }: { report: PipelineReport }) {
       {execution.errorDetails ? (
         <p className="submission-pipeline-error">{execution.errorDetails}</p>
       ) : null}
+
+      {aiEvaluation ? <AiEvaluationBlock ai={aiEvaluation} /> : null}
 
       {transformedFields.length > 0 ? (
         <div className="submission-pipeline-transformed">

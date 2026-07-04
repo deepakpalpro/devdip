@@ -169,7 +169,7 @@ Modules communicate via:
 - Legal transitions: `SUBMITTED → PENDING_REVIEW` (start review), `PENDING_REVIEW → APPROVED | REJECTED | NEEDS_INFO`, and `NEEDS_INFO → PENDING_REVIEW` (resume). Illegal transitions raise `ReviewException` (HTTP 409)
 - `ReviewService` loads the submission (tenant-scoped), applies the transition, persists the new status, and appends an audit event via the shared `SubmissionEventRecorder`
 - Reuses `SubmissionStatus` from `module-submission`; the full lifecycle enum also reserves `VALIDATING`/`PROCESSING` for the future automated pipeline
-- AI evaluation request/response contract (pluggable evaluator interface) — planned
+- AI evaluation request/response contract (pluggable `AiEvaluator` interface) — implemented as the pipeline `AI_EVALUATE` step (see §5.8, §9.6); the reviewer sees the advisory recommendation
 - Audit trail for every state transition, surfaced as a timeline in the admin portal
 
 #### `module-transformation`
@@ -190,9 +190,12 @@ Modules communicate via:
 - Per-form routing rules (approved only, include attachments, schema version)
 
 #### `module-notification`
-- Event-driven: `SubmissionSubmitted`, `StatusChanged`, `ReviewRequired`, `Approved`, `Rejected`
-- Channel adapters: email, SMS, push, in-app
-- Template engine (Thymeleaf / Handlebars) with localization
+- **Multi-channel customer notifications (implemented)** — event-driven on submission lifecycle transitions (submit + review decisions), with a configurable, data-driven provider registry mirroring form-import (see §5.11)
+- `NotificationChannel` SPI + `notification_provider` registry + `NotificationChannelRouter` (priority-based selection per logical channel); durable outbox (`notification_message`) drained by an async `@Scheduled` dispatcher with retries, backoff, and dead-lettering
+- In-JVM default `log-email` (zero-setup, demoable) and `smtp-email` (JavaMailSender) email channels; external `whatsapp-cloud` (Meta Cloud API) channel lives in `module-service-integration`
+- `RecipientResolver` derives email/phone/consent/locale from submission data; `TemplateRenderer` renders per (event, channel, locale) templates with `{{placeholder}}` substitution and built-in fallbacks
+- Advisory + fail-safe: notification errors never affect the submission/review flow; every attempt is logged to the submission timeline (`NOTIFICATION_QUEUED/SENT/DELIVERED/FAILED/SKIPPED`)
+- Delivery-status webhook endpoint (`/api/webhooks/notifications/{provider}`) updates messages to `DELIVERED`; consent enforcement gated by `notifications.require-consent`
 
 #### `module-pipeline`
 - **Automated processing pipeline (implemented)** — `SubmissionPipelineService` runs on submit: `VALIDATE → PII_SCRUB → DOWNSTREAM`, advancing the submission `SUBMITTED → VALIDATING → PROCESSING → PENDING_REVIEW` and recording each step in the submission timeline (see §5.8)
@@ -214,7 +217,8 @@ Modules communicate via:
 }
 ```
 
-- Planned: config-driven step executor registry, AI evaluation, service calls, dead-letter queue for failed steps
+- Implemented: `AI_EVALUATE` step (pluggable `AiEvaluator`, advisory + fail-safe — see §5.8, §9.6)
+- Planned: config-driven step executor registry, service calls, dead-letter queue for failed steps
 
 #### `module-analytics`
 - Publishes anonymized events to analytics topics
@@ -693,9 +697,9 @@ Any action attempted from a status not in its *allowed-from* set raises `ReviewE
 
 ---
 
-### 5.8 Automated Processing Pipeline (Validate → PII Scrub → Downstream)
+### 5.8 Automated Processing Pipeline (Validate → PII Scrub → AI Evaluate → Downstream)
 
-When a consumer submits, an **automated pipeline** runs before the application reaches a human reviewer. It advances the submission through the transient `VALIDATING`/`PROCESSING` states, produces a PII-sanitized copy for downstream consumers, and records every step in the same audit timeline used by manual review.
+When a consumer submits, an **automated pipeline** runs before the application reaches a human reviewer. It advances the submission through the transient `VALIDATING`/`PROCESSING` states, produces a PII-sanitized copy for downstream consumers, runs an **advisory AI risk evaluation** on that sanitized copy, and records every step in the same audit timeline used by manual review.
 
 **Flow (`SubmissionPipelineService.process`, one transaction):**
 
@@ -706,7 +710,8 @@ POST /submissions/{id}/submit
    ├─ PIPELINE_STARTED
    ├─ 1. VALIDATE     status→VALIDATING  re-run SectionValidator over stored data   → event VALIDATED
    ├─ 2. PII_SCRUB    status→PROCESSING  PiiScrubber → persist SanitizedPayload      → event PII_SCRUBBED
-   ├─ 3. DOWNSTREAM   (stub) dispatch sanitized payload to analytics stream          → event DOWNSTREAM_DISPATCHED
+   ├─ 3. AI_EVALUATE  AiEvaluatorRouter scores the sanitized payload (fail-safe)     → event AI_EVALUATED
+   ├─ 4. DOWNSTREAM   (stub) dispatch sanitized payload to analytics stream          → event DOWNSTREAM_DISPATCHED
    └─ COMPLETE        status→PENDING_REVIEW                                          → event PIPELINE_COMPLETED
 ```
 
@@ -714,13 +719,15 @@ The consumer submit endpoint returns the **post-pipeline** status (typically `PE
 
 **PII scrubbing.** `PiiScrubber` (`module-transformation`) recursively walks the section map (including nested embedded-form data), applies the `PiiFieldRegistry`'s strategy per field, and returns a sanitized copy plus a `fieldPath → strategy` audit. Strategies: `MASK` (last-4), `HASH` (salted SHA-256, correlatable), `REDACT`, `REMOVE`, `NONE`. The result is stored in `submission_sanitized_payload` (one row per submission) — the raw source of record is never altered. Admins can inspect the run and the sanitized payload via `GET /submissions/{id}/pipeline`.
 
+**AI evaluation (advisory).** The `AI_EVALUATE` step runs on the **sanitized** payload only (PII always scrubbed first) and produces a risk score `[0,1]` + advisory recommendation (`APPROVE`/`REVIEW`/`REJECT`) + explainability `signals`, persisted to `submission_ai_evaluation` (one row per submission) and surfaced in the pipeline report + timeline (`AI_EVALUATED`). It is a **pluggable seam** — `AiEvaluator` implementations are Spring beans; `AiEvaluatorRouter` selects the active one via `pipeline.ai.evaluator` (default `heuristic`) and can disable the step entirely (`pipeline.ai.enabled=false`). The default `HeuristicAiEvaluator` (`module-pipeline`) is deterministic and dependency-free (completeness / high-value amount / missing-contact / risk-keyword signals); an optional `OllamaAiEvaluator` (`module-service-integration`) scores via a local Ollama text model. **AI never auto-decides** — the recommendation only assists the human reviewer, and the step is fail-safe (any evaluator error/timeout degrades to `REVIEW` and never fails the submission).
+
 **Persistence & audit.** Overall run status/step/error is tracked in `pipeline_execution` (`RUNNING`/`COMPLETED`/`FAILED`); the per-step narrative lives in `submission_event` (actor = system UUID `0…0`), so both automated and manual actions share one chronological timeline in the admin UI.
 
 **Failure handling.** The pipeline **never fails the submit request**: any step exception is caught, the run is marked `FAILED` with `error_details`, a `PIPELINE_FAILED` event is recorded, and the submission is reverted to `SUBMITTED` (so an admin can still `start` a manual review). Since validation already ran at submit time, the VALIDATE step is defense-in-depth and rarely fails.
 
 **Trade-offs / boundaries.**
-- The pipeline currently runs **synchronously** in the submit request (no message broker yet). The `outbox_event` table and a future `@TransactionalEventListener`/broker would move this off the request path; the step contract and audit events stay the same.
-- Steps are **hard-coded** (`VALIDATE, PII_SCRUB, DOWNSTREAM`) rather than driven by `pipeline_config`; `PipelineStepType` already enumerates the fuller catalog (AI_EVALUATE, SERVICE_CALL, NOTIFY) for that evolution.
+- The pipeline currently runs **synchronously** in the submit request (no message broker yet). The `outbox_event` table and a future `@TransactionalEventListener`/broker would move this off the request path; the step contract and audit events stay the same. The AI step's synchronous timeout budget is bounded by the evaluator (the default heuristic is instant; the Ollama evaluator has its own timeout and fails safe).
+- Steps are **hard-coded** (`VALIDATE, PII_SCRUB, AI_EVALUATE, DOWNSTREAM`) rather than driven by `pipeline_config`; `PipelineStepType` still enumerates the fuller catalog (SERVICE_CALL, NOTIFY) for that evolution.
 - `DOWNSTREAM` is a stub (records an event) — real connectors live in `module-downstream`.
 
 ---
@@ -833,6 +840,41 @@ POST /form-imports (file)  |  POST /form-imports/from-url (url)
 - Secrets for hosted providers are resolved from the environment via `secretRef`, never persisted in `config_json`.
 
 *(This realizes the adapter-registry / configuration-model pattern sketched in §11 for the form-import use case.)*
+
+---
+
+### 5.11 Customer Notifications (Multi-Channel, Configurable Providers, Outbox)
+
+Customers are notified on the transitions that matter to them — **application received** (submit) and each **review decision** (approved / rejected / more-info) — over email and/or WhatsApp. The design reuses the platform's pluggable-provider pattern (as in form-import and AI evaluation): channels are data-driven, advisory, and fail-safe.
+
+**Trigger (decoupled).** `SubmissionService.submit` and `ReviewService.decide` publish a `SubmissionLifecycleEvent` via Spring's `ApplicationEventPublisher`. The submission module knows nothing about notifications — it just announces a domain fact. `module-notification` subscribes with a `@TransactionalEventListener(AFTER_COMMIT)`, so a customer is only ever contacted once the transition has durably committed.
+
+**Fan-out + outbox.** On an eligible transition, `NotificationService` resolves the recipient, and for each eligible logical channel (email if an address is present, WhatsApp if a phone is present) enqueues one `notification_message` row (`PENDING`) — the durable outbox. `NotificationChannelRouter` selects the highest-priority **enabled** `notification_provider` whose `code` matches an available `NotificationChannel` bean.
+
+**Async delivery.** `NotificationDispatcher` (`@Scheduled`) drains `PENDING` messages, dispatching each in its own transaction via `NotificationService.dispatch`. On success → `SENT`; on failure → retry with linear backoff up to `notifications.max-attempts`, then dead-letter to `FAILED`. This gives async processing, retries, and DLQ semantics without a broker; swapping the poll for a broker consumer later is a localized change.
+
+```
+submit / review decision
+   → SubmissionLifecycleEvent (AFTER_COMMIT)
+      → resolve recipient (email/phone/consent/locale from submission data)
+      → per channel: render template → enqueue notification_message (PENDING)
+   → @Scheduled dispatcher: send → SENT | retry(backoff) | FAILED(DLQ)
+   → provider webhook (optional) → DELIVERED
+```
+
+**Channels (data-driven registry).**
+
+| Provider `code` | Channel | Where | Default | Notes |
+|---|---|---|---|---|
+| `log-email` | email | `module-notification` (in-JVM) | **enabled** | Renders to the log; zero setup, demoable/testable |
+| `smtp-email` | email | `module-notification` (JavaMailSender) | disabled | Needs `spring.mail.*` / an SMTP host (e.g. Mailpit) |
+| `whatsapp-cloud` | whatsapp | `module-service-integration` (Meta Cloud API) | disabled | Needs `endpoint` + `phoneNumberId` + `secretRef`; uses approved **templates** outside the 24h window |
+
+**Templates & recipients.** `notification_template` rows are keyed by (event, channel, locale) with `{{placeholder}}` substitution (`formName`, `reference`, `status`), falling back to `en` then a built-in default. `RecipientResolver` derives contact points heuristically from submission field names (`email`, `phone/mobile`, `consent/optin`, `locale/language`) — form-agnostic, mirroring the AI evaluator.
+
+**Cross-cutting.** Recipients are masked (`ja***@example.com`) in logs, admin views, and timeline events; secrets come from the environment via `secretRef`; consent is enforced when `notifications.require-consent=true`; a webhook endpoint (`/api/webhooks/notifications/{provider}`) applies provider delivery-status callbacks (→ `DELIVERED`). Every step lands on the submission timeline, and no notification failure can break the submission or review flow.
+
+**Admin.** Providers are managed from the admin Settings → *Notifications* page (enable/disable, priority, JSON config), exactly like import providers; templates are listed read-only.
 
 ---
 
@@ -1085,6 +1127,17 @@ public record AiEvaluationResult(
 - Output schema validation (JSON Schema)
 - Fallback: `recommendation = REVIEW` on timeout or invalid response
 - Model version pinned in pipeline config for audit reproducibility
+
+### 9.6 Current Implementation (AI_EVALUATE step)
+The `AiEvaluator` seam is **implemented** and wired into the pipeline as the `AI_EVALUATE` step (§5.8):
+- **SPI** (`module-pipeline` `spi/`): `AiEvaluator` (`evaluatorId()` + `evaluate(AiEvaluationContext)`), `AiEvaluationContext` (submissionId, formCode, sanitized data, metadata), `AiEvaluationResult` (riskScore `[0,1]`, `AiRecommendation`, rationale, signals, processingTimeMs). Slightly tightened vs the §9.2 sketch (typed enum recommendation, normalised risk score).
+- **Selection & fail-safe**: `AiEvaluatorRouter` picks the bean named by `pipeline.ai.evaluator` (default `heuristic`), honours `pipeline.ai.enabled`, and guarantees the guardrail fallback (`REVIEW`) on any exception/null/absent evaluator.
+- **Default provider**: `HeuristicAiEvaluator` — deterministic, no external calls (the "mock/dev evaluator" of §9.4, made useful).
+- **External provider**: `OllamaAiEvaluator` (`module-service-integration`) — local Ollama text model (`llama3.2` by default), opt-in via `pipeline.ai.evaluator=ollama`.
+- **Persistence**: latest result per submission in `submission_ai_evaluation` (migration `V12`), exposed in the pipeline report and audit timeline.
+- **Human-in-the-loop**: advisory only — never changes the submission's terminal status (§9.1).
+
+*Not yet done (future):* per-form prompt templates, async/batch modes, hosted providers (OpenAI/Bedrock), and `pipeline_config`-driven step ordering.
 
 ---
 
@@ -1367,11 +1420,11 @@ flowchart TB
 - [ ] Event framework + outbox pattern
 - [ ] Pipeline orchestrator (validate, notify)
 - [ ] Status management + admin review queue
-- [ ] Notification module
+- [x] Notification module (multi-channel email/WhatsApp, configurable providers, outbox + async dispatch — see §5.11)
 
 ### Phase 4 — Advanced Integrations (Weeks 13–16)
-- [ ] PII scrubbing pipeline
-- [ ] AI evaluator interface + mock adapter
+- [x] PII scrubbing pipeline
+- [x] AI evaluator interface + default (heuristic) adapter + optional Ollama adapter
 - [ ] Service integration layer
 - [ ] Downstream connectors (Kafka, S3, REST)
 

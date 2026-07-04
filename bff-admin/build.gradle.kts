@@ -14,4 +14,5 @@ dependencies {
     implementation(project(":module-submission"))
     implementation(project(":module-processing"))
     implementation(project(":module-pipeline"))
+    implementation(project(":module-notification"))
 }

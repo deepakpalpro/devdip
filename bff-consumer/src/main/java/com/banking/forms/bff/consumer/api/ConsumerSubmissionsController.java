@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -105,6 +106,22 @@ public class ConsumerSubmissionsController {
             @Valid @RequestBody SaveSectionRequest request) {
         try {
             submissionService.saveSection(tenantId, id, sectionKey, request.data(), request.resumeSectionKey());
+            return ResponseEntity.noContent().build();
+        } catch (SubmissionNotFoundException ex) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage());
+        } catch (SubmissionValidationException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> discardDraft(
+            @RequestHeader("X-Tenant-Id") UUID tenantId,
+            @RequestHeader(value = "X-Dev-User-Id", required = false) String userIdHeader,
+            @PathVariable("id") UUID id) {
+        UUID userId = DevRequestContext.resolveUserId(userIdHeader);
+        try {
+            submissionService.discardDraft(tenantId, id, userId);
             return ResponseEntity.noContent().build();
         } catch (SubmissionNotFoundException ex) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage());

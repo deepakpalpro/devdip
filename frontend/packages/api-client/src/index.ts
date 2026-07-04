@@ -102,6 +102,30 @@ export interface UpdateImportProviderRequest {
   config?: Record<string, unknown> | null;
 }
 
+export interface NotificationProvider {
+  code: string;
+  name: string;
+  channelType: string;
+  enabled: boolean;
+  priority: number;
+  available: boolean;
+  config: Record<string, unknown> | null;
+}
+
+export interface UpdateNotificationProviderRequest {
+  enabled: boolean;
+  priority: number;
+  config?: Record<string, unknown> | null;
+}
+
+export interface NotificationTemplate {
+  eventType: string;
+  channelType: string;
+  locale: string;
+  subject: string | null;
+  body: string;
+}
+
 export interface AcceptedForm {
   jobId: string;
   formId: string;
@@ -203,10 +227,21 @@ export interface TransformedField {
   strategy: string;
 }
 
+export interface AiEvaluation {
+  evaluatorId: string;
+  model: string | null;
+  riskScore: number;
+  recommendation: string;
+  rationale: string | null;
+  signals: Record<string, unknown>;
+  evaluatedAt: string;
+}
+
 export interface PipelineReport {
   execution: PipelineExecution | null;
   sanitizedPayload: Record<string, Record<string, unknown>> | null;
   transformedFields: TransformedField[];
+  aiEvaluation: AiEvaluation | null;
 }
 
 export interface ApiClientConfig {
@@ -321,6 +356,16 @@ export function createApiClient(config: ApiClientConfig = {}) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }),
+    listNotificationProviders: () =>
+      request<NotificationProvider[]>('/api/admin/v1/notification-providers', config),
+    updateNotificationProvider: (code: string, body: UpdateNotificationProviderRequest) =>
+      request<NotificationProvider>(`/api/admin/v1/notification-providers/${encodeURIComponent(code)}`, config, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    listNotificationTemplates: () =>
+      request<NotificationTemplate[]>('/api/admin/v1/notification-providers/templates', config),
     listAdminSubmissions: () =>
       request<AdminSubmissionSummary[]>('/api/admin/v1/submissions', config),
     getAdminSubmission: (submissionId: string) =>
@@ -351,6 +396,10 @@ export function createApiClient(config: ApiClientConfig = {}) {
       }),
     getSubmission: (submissionId: string) =>
       request<SubmissionDetail>(`/api/consumer/v1/submissions/${submissionId}`, config),
+    discardSubmission: (submissionId: string) =>
+      request<void>(`/api/consumer/v1/submissions/${submissionId}`, config, {
+        method: 'DELETE',
+      }),
     saveSection: (
       submissionId: string,
       sectionKey: string,

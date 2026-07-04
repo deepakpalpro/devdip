@@ -11,7 +11,6 @@ dependencies {
     implementation(project(":module-submission"))
     implementation(project(":module-processing"))
     implementation(project(":module-transformation"))
-    implementation(project(":module-service-integration"))
     implementation(project(":module-downstream"))
     implementation(project(":module-notification"))
 }

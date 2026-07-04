@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { SectionRenderer, type FormSectionSchema } from '@banking-forms/form-renderer';
 import { Button, ErrorState, LoadingState, PageHeader } from '@banking-forms/ui';
 import {
+  useConsumerForm,
   useCreateSubmission,
   useSaveSection,
   useSubmission,
@@ -35,11 +36,24 @@ export function SubmissionWizardPage() {
 
   const createSubmission = useCreateSubmission(formCode ?? '', discoverySessionId);
   const { data: submission, isLoading, error, refetch } = useSubmission(submissionId);
-  const saveSection = useSaveSection(submissionId ?? '');
-  const submitApplication = useSubmitApplication(submissionId ?? '');
+  // Lazy-draft: when there is no submission yet, render sections straight from the published form
+  // schema. A draft is only created on the first save/submit, so merely opening a form (and leaving)
+  // never persists an orphan draft.
+  const {
+    data: form,
+    isLoading: formLoading,
+    error: formError,
+  } = useConsumerForm(formCode, !submissionId);
+  const saveSection = useSaveSection();
+  const submitApplication = useSubmitApplication();
 
+  // A discovery hand-off intentionally starts a pre-filled draft up-front so the applicant sees their
+  // questionnaire answers; that draft is a deliberate action, not an accidental orphan.
   useEffect(() => {
-    if (!formCode || submissionId || createSubmission.isPending || createSubmission.isSuccess) {
+    if (!formCode || submissionId || !discoverySessionId) {
+      return;
+    }
+    if (createSubmission.isPending || createSubmission.isSuccess) {
       return;
     }
     createSubmission.mutate(undefined, {
@@ -48,12 +62,21 @@ export function SubmissionWizardPage() {
         setSubmissionId(created.submissionId);
       },
     });
-  }, [formCode, submissionId, createSubmission]);
+  }, [formCode, submissionId, discoverySessionId, createSubmission]);
 
   useEffect(() => {
     if (!submission) return;
     setSectionValues((prev) => ({ ...submission.sectionData, ...prev }));
   }, [submission]);
+
+  // Ensures a draft exists, creating one lazily on first persistence. Returns the submission id.
+  const ensureSubmissionId = async (): Promise<string> => {
+    if (submissionId) return submissionId;
+    const created = await createSubmission.mutateAsync();
+    if (formCode) localStorage.setItem(storageKey(formCode), created.submissionId);
+    setSubmissionId(created.submissionId);
+    return created.submissionId;
+  };
 
   // On resume, land on the section the applicant last worked on — but only once, so that the
   // refetches triggered by each auto-save don't keep yanking the user's position around.
@@ -67,30 +90,35 @@ export function SubmissionWizardPage() {
     if (index >= 0) setCurrentIndex(index);
   }, [submission]);
 
-  const sections = useMemo(() => submission?.schema.sections ?? [], [submission]);
+  // Schema comes from the loaded submission when resuming, otherwise from the published form.
+  const schema = submission?.schema ?? form?.schema;
+  const formName = submission?.formName ?? form?.name ?? formCode ?? '';
+  const serverSectionData = submission?.sectionData ?? {};
+  const sections = useMemo(() => schema?.sections ?? [], [schema]);
   const currentSection: FormSectionSchema | undefined = sections[currentIndex];
 
   if (!formCode) {
     return <ErrorState message="Missing form code." />;
   }
 
-  if (createSubmission.isPending || isLoading || !submissionId) {
-    return <LoadingState message="Preparing your application…" />;
-  }
-
-  if (createSubmission.isError || error) {
+  if (createSubmission.isError || error || formError) {
     return (
       <ErrorState
         message={
           (createSubmission.error instanceof Error && createSubmission.error.message) ||
           (error instanceof Error && error.message) ||
+          (formError instanceof Error && formError.message) ||
           'Unable to start application'
         }
       />
     );
   }
 
-  if (!submission || !currentSection) {
+  if (isLoading || formLoading || !schema) {
+    return <LoadingState message="Loading form…" />;
+  }
+
+  if (!currentSection) {
     return <ErrorState message="Form schema unavailable." />;
   }
 
@@ -111,8 +139,9 @@ export function SubmissionWizardPage() {
   // Draft-friendly partial save: persist whatever the applicant has entered so far (no required-field
   // gate) and record the section they should resume on next time. Completeness is enforced on submit.
   const persistSection = async (resumeSectionKey: string) => {
-    await saveSection.mutateAsync({ sectionKey: currentSection.key, data: values, resumeSectionKey });
-    await refetch();
+    const id = await ensureSubmissionId();
+    await saveSection.mutateAsync({ submissionId: id, sectionKey: currentSection.key, data: values, resumeSectionKey });
+    if (submissionId) await refetch();
   };
 
   const goNext = async () => {
@@ -148,7 +177,8 @@ export function SubmissionWizardPage() {
         return;
       }
     }
-    await submitApplication.mutateAsync();
+    const id = await ensureSubmissionId();
+    await submitApplication.mutateAsync({ submissionId: id });
     if (formCode) {
       localStorage.removeItem(storageKey(formCode));
     }
@@ -178,7 +208,7 @@ export function SubmissionWizardPage() {
 
   return (
     <div className="submission-wizard">
-      <PageHeader title={submission.formName} description="Complete each section — progress is saved as you go." />
+      <PageHeader title={formName} description="Complete each section — progress is saved as you go." />
 
       {discoverySessionId ? (
         <div className="submission-prefill-note">
@@ -193,7 +223,7 @@ export function SubmissionWizardPage() {
             className={[
               'submission-step',
               index === currentIndex && mode === 'sections' ? 'submission-step-active' : '',
-              index < currentIndex || submission.sectionData[section.key] ? 'submission-step-done' : '',
+              index < currentIndex || serverSectionData[section.key] ? 'submission-step-done' : '',
             ]
               .filter(Boolean)
               .join(' ')}
@@ -211,8 +241,8 @@ export function SubmissionWizardPage() {
             <Button variant="secondary" onClick={() => setMode('sections')}>
               Back
             </Button>
-            <Button onClick={handleSubmit} disabled={submitApplication.isPending}>
-              {submitApplication.isPending ? 'Submitting…' : 'Submit application'}
+            <Button onClick={handleSubmit} disabled={submitApplication.isPending || createSubmission.isPending}>
+              {submitApplication.isPending || createSubmission.isPending ? 'Submitting…' : 'Submit application'}
             </Button>
           </div>
           {submitApplication.isError ? (
@@ -236,7 +266,7 @@ export function SubmissionWizardPage() {
           <div className="submission-actions" style={{ marginTop: '1.5rem' }}>
             <div>
               {currentIndex > 0 ? (
-                <Button variant="secondary" onClick={goBack} disabled={saveSection.isPending}>
+                <Button variant="secondary" onClick={goBack} disabled={saveSection.isPending || createSubmission.isPending}>
                   Back
                 </Button>
               ) : (
@@ -245,8 +275,12 @@ export function SubmissionWizardPage() {
                 </Link>
               )}
             </div>
-            <Button onClick={goNext} disabled={saveSection.isPending}>
-              {saveSection.isPending ? 'Saving…' : currentIndex < sections.length - 1 ? 'Save & continue' : 'Review'}
+            <Button onClick={goNext} disabled={saveSection.isPending || createSubmission.isPending}>
+              {saveSection.isPending || createSubmission.isPending
+                ? 'Saving…'
+                : currentIndex < sections.length - 1
+                  ? 'Save & continue'
+                  : 'Review'}
             </Button>
           </div>
           {saveSection.isError ? (

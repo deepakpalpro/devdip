@@ -46,7 +46,7 @@
 | E5 | Consumer Application Lifecycle | List, resume, track status | M3 | ✅ |
 | E6 | Processing Pipeline | Validate → PII scrub → downstream | M4 | ✅ (🟡 real downstream) |
 | E7 | Admin Review & Operations | Queue, review, audit, pipeline report | M4 | ✅ |
-| E8 | Advanced Integrations | Connectors, eventing, AI, notifications | M5 | ⏳ |
+| E8 | Advanced Integrations | Connectors, eventing, AI, notifications | M5 | 🟡 (AI evaluation + notifications done) |
 | E9 | Security & Observability Hardening | OIDC, dashboards, testing, analytics | M5/M6 | ⏳ |
 | E10 | Form Import (AI-assisted) | Import a form from PDF/CSV/XLS/HTML/URL/image via configurable extractors + human review | M4.5 (Phase 3) | ✅ (🟡 hosted-LLM seam) |
 
@@ -214,9 +214,15 @@
 
 - **US-8.1 — Downstream connectors** ⏳ · `module-downstream` — real Kafka/S3/REST/core-banking delivery + `outbox_event` reliability.
 - **US-8.2 — Event-driven pipeline** ⏳ · `M-PIPELINE` — outbox → message broker → async step workers.
-- **US-8.3 — AI evaluation step** ⏳ · `module-service-integration`, `M-PIPELINE` — `AI_EVALUATE` via adapter + guardrails.
+- **US-8.3 — AI evaluation step** ✅ · `M-PIPELINE`, `module-service-integration` — `AI_EVALUATE` pipeline step scores the sanitized payload via a pluggable `AiEvaluator` (deterministic `heuristic` default; optional local Ollama). Advisory risk score + `APPROVE`/`REVIEW`/`REJECT` + signals, persisted (`submission_ai_evaluation`) and shown in the pipeline report/timeline. **Fail-safe** (degrades to `REVIEW`) and **human-in-the-loop** (never auto-decides). *(Hosted LLMs / per-form prompts → future.)*
 - **US-8.4 — Service-integration adapters** ⏳ · `module-service-integration` — external API adapter registry.
-- **US-8.5 — Notifications** ⏳ · `module-notification` — event-triggered customer/staff notifications.
+- **US-8.5 — Customer notifications (email + WhatsApp)** ✅ · `module-notification`, `module-service-integration`, `BFF-ADMIN`, `FE-ADMIN` — notify the customer on submit and on each review decision over email and/or WhatsApp.
+  - **AC1** — On submit (`APPLICATION_SUBMITTED`) and on approve/reject/needs-info decisions, an event is raised (`SubmissionLifecycleEvent`) and a notification is enqueued per eligible channel; the transition and each notification are recorded on the submission timeline.
+  - **AC2** — Providers are **configurable & data-driven** (`notification_provider` registry + `NotificationChannel` SPI): `log-email` (zero-setup default), `smtp-email` (JavaMailSender), `whatsapp-cloud` (Meta Cloud API, in `M-SVCINT`, disabled until configured). Managed from the admin **Settings → Notifications** page (enable/disable, priority, `config_json`).
+  - **AC3** — Templates per (event, channel, locale) with `{{placeholder}}` substitution + built-in fallbacks; recipient (email/phone/consent/locale) resolved from the submission data.
+  - **AC4** — **Reliable & async:** durable outbox (`notification_message`) drained by a `@Scheduled` dispatcher; retries with backoff → dead-letter (`FAILED`); delivery-status webhook (`/api/webhooks/notifications/{provider}`) → `DELIVERED`.
+  - **AC5** — **Advisory + fail-safe & PII-safe:** a notification failure never affects submit/review; recipients masked in logs/views; secrets via `secretRef`; consent enforced when `notifications.require-consent=true`; WhatsApp uses approved templates outside the 24h window.
+  - *(Future: SMS/push channels, per-tenant template CRUD UI, staff/internal notifications, provider signature verification.)*
 
 ### E10 — Form Import (AI-assisted) (Phase 3) ✅
 
@@ -289,9 +295,9 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | US-7.4 | Pipeline report | M-PIPELINE, BFF-ADMIN, FE-ADMIN | ✅ | S6 |
 | US-8.1 | Downstream connectors | module-downstream | ⏳ | S7 |
 | US-8.2 | Event-driven pipeline | M-PIPELINE (outbox→broker) | ⏳ | S7 |
-| US-8.3 | AI evaluation | module-service-integration, M-PIPELINE | ⏳ | S8 |
+| US-8.3 | AI evaluation | M-PIPELINE, module-service-integration | ✅ | S6.6 |
 | US-8.4 | Service adapters | module-service-integration | ⏳ | S8 |
-| US-8.5 | Notifications | module-notification | ⏳ | S8 |
+| US-8.5 | Customer notifications (email/WhatsApp) | module-notification, module-service-integration, BFF-ADMIN, FE-ADMIN | ✅ | S6.7 |
 | US-9.1 | OIDC auth & RBAC | APP-CORE, M-IDENTITY | ⏳ | S7 |
 | US-9.2 | Observability | M-OBSERV | 🟡 | S8 |
 | US-9.3 | Load & security testing | (cross-cutting) | ⏳ | S8 |
@@ -314,8 +320,10 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | **S5** | Automated processing pipeline + PII | US-6.1 … US-6.3 | M4 | ✅ Done |
 | **S6** | Admin review workspace + pipeline report | US-7.1 … US-7.4 | M4 | ✅ Done |
 | **S6.5** | Form import (multi-source, configurable providers, Ollama vision) — Phase 3 | US-10.1 … US-10.4 | M4.5 | ✅ Done |
+| **S6.6** | AI evaluation step (pluggable evaluator, heuristic + Ollama) — Phase 3 | US-8.3 | M4.5 | ✅ Done |
+| **S6.7** | Customer notifications (email/WhatsApp, configurable providers, outbox + async dispatch) — Phase 3 | US-8.5 | M4.5 | ✅ Done |
 | **S7** | OIDC auth + real downstream + eventing | US-9.1, US-8.1, US-8.2 | M5 | ⏳ Planned |
-| **S8** | AI, notifications, analytics, observability, hardening + visual builder | US-8.3–8.5, US-9.2–9.4, US-2.5 | M5/M6 | ⏳ Planned |
+| **S8** | Service adapters, analytics, observability, hardening + visual builder | US-8.4, US-9.2–9.4, US-2.5 | M5/M6 | ⏳ Planned |
 
 ---
 
@@ -327,11 +335,11 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | **M2** | Authoring & Filling | E2, E4 | Author→publish→fill→submit works end-to-end | ✅ |
 | **M3** | Consumer Experience | E3, E5 | Discovery + resumable drafts + status tracking | ✅ |
 | **M4** | Processing & Review | E6, E7 | Automated pipeline + auditable review workflow | ✅ |
-| **M4.5** | Form Import (Phase 3) | E10 | Import a form from PDF/CSV/XLS/HTML/URL/image via configurable providers + human review | ✅ |
+| **M4.5** | Form Import + AI eval + Notifications (Phase 3) | E10, E8 (US-8.3, US-8.5) | Import a form from PDF/CSV/XLS/HTML/URL/image via configurable providers + human review; advisory AI risk evaluation; multi-channel customer notifications (email/WhatsApp) | ✅ |
 | **M5** | Integrations & Security | E8 (part), E9 (part) | OIDC live, real downstream connector, async pipeline | ⏳ |
 | **M6** | Observability & Hardening | E9 | Dashboards, alerting, load/security tested, analytics | ⏳ |
 
-**Current state:** M1–M4 complete (MVP feature-complete for the core lifecycle); M4.5 (Form Import, Phase 3) complete. M5–M6 planned.
+**Current state:** M1–M4 complete (MVP feature-complete for the core lifecycle); M4.5 (Phase 3: Form Import + AI evaluation + Customer Notifications) complete. M5–M6 planned.
 
 ---
 
@@ -350,7 +358,7 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | R1 | Auth still dev-headers | Blocks production | US-9.1 (OIDC) before any real deployment |
 | R2 | Synchronous pipeline | Latency/throughput ceiling | US-8.2 async migration (outbox present) |
 | R3 | Visual builder is a stub | Author friction | US-2.5; JSON editor mitigates now |
-| R4 | Downstream/AI/notifications placeholders | No external effects | US-8.1/8.3/8.5 behind existing interfaces |
+| R4 | Downstream placeholder | No external effects yet | US-8.1 behind existing connector interface (AI eval US-8.3 + notifications US-8.5 now implemented) |
 | A1 | Single shared DB acceptable at current scale | — | Read replicas; revisit DB-per-tenant later |
 | D1 | OIDC IdP availability | Gates US-9.1 | Coordinate with security/infra |
 

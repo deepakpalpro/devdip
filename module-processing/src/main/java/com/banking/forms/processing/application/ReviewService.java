@@ -23,14 +23,17 @@ public class ReviewService {
     private final SubmissionRepository submissionRepository;
     private final SubmissionEventRecorder eventRecorder;
     private final ReviewWorkflow workflow;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     public ReviewService(
             SubmissionRepository submissionRepository,
             SubmissionEventRecorder eventRecorder,
-            ReviewWorkflow workflow) {
+            ReviewWorkflow workflow,
+            org.springframework.context.ApplicationEventPublisher eventPublisher) {
         this.submissionRepository = submissionRepository;
         this.eventRecorder = eventRecorder;
         this.workflow = workflow;
+        this.eventPublisher = eventPublisher;
     }
 
     public SubmissionStatus decide(
@@ -60,6 +63,14 @@ public class ReviewService {
             payload.put("note", note.trim());
         }
         eventRecorder.record(submissionId, eventType(action), payload, actorId);
+
+        eventPublisher.publishEvent(new com.banking.forms.submission.application.event.SubmissionLifecycleEvent(
+                submission.getTenantId(),
+                submission.getId(),
+                submission.getUserId(),
+                submission.getFormVersionId(),
+                from,
+                to));
 
         return to;
     }

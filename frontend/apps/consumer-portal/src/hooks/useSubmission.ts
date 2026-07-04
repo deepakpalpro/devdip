@@ -20,6 +20,19 @@ export function useSubmission(submissionId: string | null) {
   });
 }
 
+/**
+ * Fetches a published form's schema by code without creating a submission. Used by the wizard to
+ * render sections before a draft exists (lazy-draft flow), so merely opening a form no longer
+ * persists an orphan draft.
+ */
+export function useConsumerForm(formCode: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ['consumer-form', formCode ?? ''] as const,
+    queryFn: () => api.getConsumerForm(formCode!),
+    enabled: enabled && Boolean(formCode),
+  });
+}
+
 export function useCreateSubmission(formCode: string, discoverySessionId?: string) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -28,30 +41,42 @@ export function useCreateSubmission(formCode: string, discoverySessionId?: strin
   });
 }
 
-export function useSaveSection(submissionId: string) {
+export function useSaveSection() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
+      submissionId,
       sectionKey,
       data,
       resumeSectionKey,
     }: {
+      submissionId: string;
       sectionKey: string;
       data: Record<string, unknown>;
       resumeSectionKey?: string;
     }) => api.saveSection(submissionId, sectionKey, data, resumeSectionKey),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: submissionKey(submissionId) }),
+    onSuccess: (_result, variables) =>
+      queryClient.invalidateQueries({ queryKey: submissionKey(variables.submissionId) }),
   });
 }
 
-export function useSubmitApplication(submissionId: string) {
+export function useSubmitApplication() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => api.submitSubmission(submissionId, crypto.randomUUID()),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: submissionKey(submissionId) });
+    mutationFn: ({ submissionId }: { submissionId: string }) =>
+      api.submitSubmission(submissionId, crypto.randomUUID()),
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: submissionKey(variables.submissionId) });
       queryClient.invalidateQueries({ queryKey: mySubmissionsKey });
     },
+  });
+}
+
+export function useDiscardSubmission() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (submissionId: string) => api.discardSubmission(submissionId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: mySubmissionsKey }),
   });
 }
 
