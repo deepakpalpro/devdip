@@ -241,7 +241,9 @@ graph TB
 | Event-driven pipeline (outbox → async worker) | ✅ Implemented (default async; sync fallback; broker SPI seam) |
 | AI evaluator, service-integration adapters | ✅ Implemented (SERVICE_CALL step + adapter registry) |
 | Analytics export | ✅ Phase 4 (US-9.4) — CSV/JSON from sanitized payloads |
-| Observability dashboards, load/security testing | ✅ Phase 4 (US-9.2, US-9.3) — Prometheus/Grafana, load-test + OWASP scan scripts |
+| Observability dashboards, load/security testing | ✅ Phase 4 (US-9.2, US-9.3) — Prometheus/Grafana + provisioned dashboard, load-test + OWASP scan scripts |
+| MCP agent integration (form suggest & fill) | ✅ Phase 5 — `mcp-server/` MCP tools, project `.cursor/mcp.json`, dev scripts; UAT: [`MCP_TECHNICAL_GUIDE.md`](MCP_TECHNICAL_GUIDE.md) |
+| Kafka downstream connector | ✅ Phase 5 — `KafkaDownstreamConnector` + `webhook-sink` dev stack |
 
 *(Delivery mapping in [`PROJECT_MANAGEMENT.md`](PROJECT_MANAGEMENT.md).)*
 

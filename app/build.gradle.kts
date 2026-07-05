@@ -43,3 +43,8 @@ tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
 tasks.named<Jar>("jar") {
     enabled = false
 }
+
+tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
+    // Docker Desktop (Mac/Win) reaches the host via IPv4 host.docker.internal
+    jvmArgs("-Djava.net.preferIPv4Stack=true")
+}

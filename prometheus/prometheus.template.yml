@@ -4,8 +4,8 @@ global:
   scrape_timeout: 10s
 
 scrape_configs:
+  # Scrape the Spring Boot host from inside Docker (Mac/Win Docker Desktop).
   - job_name: banking-forms-platform
     metrics_path: /actuator/prometheus
     static_configs:
-      - targets: ["host.docker.internal:8080"]
-    # Docker Desktop (Mac/Win): host.docker.internal reaches the host JVM when server.address=0.0.0.0
+      - targets: ["__SCRAPE_HOST__:8080"]

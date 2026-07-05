@@ -5,9 +5,8 @@ package com.banking.forms.downstream.spi;
  * configurable providers, selected at runtime by priority from the {@code downstream_provider}
  * registry — mirroring the notification-channel and form-import extractor patterns.
  *
- * <p>{@code log} and {@code rest} ship with in-JVM implementations. {@code kafka} and {@code s3} are
- * configured-but-unavailable seams: their providers exist in the registry but have no implementation
- * bean until an adapter (with its broker/bucket dependency) is added to {@code module-service-integration}.
+ * <p>{@code log}, {@code rest}, and {@code kafka} ship with in-JVM implementations. {@code s3} is a
+ * configured-but-unavailable seam until an adapter is added.
  */
 public final class ConnectorTypes {
 

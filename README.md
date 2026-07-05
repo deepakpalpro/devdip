@@ -10,6 +10,8 @@ Multi-tenant banking support platform — form building, submission, processing,
 | [docs/SOLUTION_ARCHITECTURE.md](docs/SOLUTION_ARCHITECTURE.md) | Solution Architect | C4 views, ADRs, NFRs, security/data/integration architecture, roadmap |
 | [docs/PROJECT_MANAGEMENT.md](docs/PROJECT_MANAGEMENT.md) | Project Manager / PO | Epics, user stories + acceptance criteria, sprint plan, milestones, story→component traceability |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | All | Original full technical design (source of truth) |
+| [docs/MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md) | Developers / QA | MCP agent integration — architecture & tools (Phase 5) |
+| [docs/MCP_TECHNICAL_GUIDE.md](docs/MCP_TECHNICAL_GUIDE.md) | Developers / QA | MCP UAT checklist, run-all-servers commands |
 
 User stories in the PM doc map to technical components via IDs (e.g. `US-2.1` → `M-FORMDEF`); see the traceability matrix in [PROJECT_MANAGEMENT.md §5](docs/PROJECT_MANAGEMENT.md) and the component index in [TECHNICAL_GUIDE.md §13](docs/TECHNICAL_GUIDE.md).
 
@@ -20,6 +22,16 @@ User stories in the PM doc map to technical components via IDs (e.g. `US-2.1` �
 
 ## Quick start
 
+**Run all servers (backend, frontends, Docker integrations):**
+
+```bash
+./scripts/start-all-dev.sh              # full dev stack
+./scripts/start-all-dev.sh --obs --mcp  # + Prometheus/Grafana + MCP HTTP
+./scripts/stop-all-dev.sh               # tear down
+```
+
+**Backend only:**
+
 ```bash
 ./gradlew bootRun
 ```
@@ -27,6 +39,8 @@ User stories in the PM doc map to technical components via IDs (e.g. `US-2.1` �
 The app starts on port **8080** with the `local` profile (in-memory H2, MySQL compatibility mode, Flyway migrations).
 
 Health check: `GET http://localhost:8080/actuator/health`
+
+**MCP agent UAT:** see [docs/MCP_TECHNICAL_GUIDE.md](docs/MCP_TECHNICAL_GUIDE.md)
 
 ## Modules
 
@@ -40,6 +54,7 @@ Health check: `GET http://localhost:8080/actuator/health`
 | `module-submission` | Drafts and submissions |
 | `module-pipeline` | Pipeline orchestration |
 | `module-*` | Processing, PII, integrations, notifications, analytics, observability |
+| `mcp-server/` | MCP agent bridge — LLM tools for form suggest/fill (Phase 5) |
 
 ## Build
 

@@ -7,6 +7,8 @@
 > - [`SOLUTION_ARCHITECTURE.md`](SOLUTION_ARCHITECTURE.md) — architecture views, decisions, NFRs (for Solution Architects).
 > - [`PROJECT_MANAGEMENT.md`](PROJECT_MANAGEMENT.md) — epics, user stories, sprints (for PMs). Story IDs (e.g. `US-2.1`) referenced here map back to that document.
 > - [`ARCHITECTURE.md`](ARCHITECTURE.md) — original full design/source of truth.
+> - [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) — MCP architecture & tool catalog (Phase 5).
+> - [`MCP_TECHNICAL_GUIDE.md`](MCP_TECHNICAL_GUIDE.md) — MCP UAT, run-all-servers commands.
 
 Each component below is tagged with a **Component ID** (e.g. `M-FORMDEF`) so user stories and the traceability matrix can reference it.
 
@@ -14,31 +16,39 @@ Each component below is tagged with a **Component ID** (e.g. `M-FORMDEF`) so use
 
 ## 1. Quick Start (Developer)
 
+**Run everything (backend, frontends, Docker integrations):**
+
+```bash
+./scripts/start-all-dev.sh              # minimum full dev stack
+./scripts/start-all-dev.sh --obs --mcp  # + Prometheus/Grafana + MCP HTTP :3100
+./scripts/stop-all-dev.sh               # tear down
+```
+
+**Or start components individually:**
+
 ```bash
 # Backend (in-memory H2, MySQL-compat, Flyway migrations, local profile)
 ./gradlew bootRun                        # http://localhost:8080
 # Health: GET /actuator/health   |   API docs: /swagger-ui.html
 
-# Local integrations (Ollama, Kafka, LocalStack) — optional, for AI/vision + future connectors
-cp .env.example .env                     # reference env vars
+# Local integrations (Ollama, Kafka, LocalStack) — optional
+cp .env.example .env
 ./scripts/docker-up.sh                   # ollama :11434, kafka :9092, localstack :4566
-./scripts/docker-up.sh --obs             # + Prometheus :9090, Grafana :3000
+./scripts/docker-up.sh --obs --mcp       # + Prometheus, Grafana, MCP HTTP
 
 # Frontend (npm workspaces monorepo)
 cd frontend && npm install
 npm run dev:consumer                     # http://localhost:5173
 npm run dev:admin                        # http://localhost:5174
 
-# Observability only (or use ./scripts/docker-up.sh --obs for full stack)
-docker compose --profile observability up -d   # Prometheus :9090, Grafana :3000 (admin/admin)
-
 # Load & security baselines (US-9.3)
-./scripts/load-test.sh                   # health-check load baseline
-./scripts/security-scan.sh               # OWASP dependency-check report
+./scripts/load-test.sh
+./scripts/security-scan.sh
 
-# MCP server (LLM agent bridge — see docs/MCP_INTEGRATION.md)
+# MCP server — LLM agent bridge (Phase 5)
 cd mcp-server && npm install && npm run build
-docker compose --profile mcp up -d         # HTTP MCP on :3100
+# Cursor stdio: see docs/MCP_TECHNICAL_GUIDE.md §4
+# HTTP mode:    docker compose --profile mcp up -d  →  :3100/mcp
 ```
 
 - Dev tenant id (seeded): `11111111-1111-1111-1111-111111111111` (sent as `X-Tenant-Id`).
@@ -52,6 +62,7 @@ docker compose --profile mcp up -d         # HTTP MCP on :3100
 | Ollama | `:11434` | Vision form import (`llava`) + AI eval (`llama3.2`) | Enable `ollama-vision` in Settings → Import; optional `--args='--pipeline.ai.evaluator=ollama'` |
 | Kafka | `:9092` | Downstream `kafka-stream` seam | Topic `submissions.processed` auto-created; set `bootstrapServers` in Settings → Downstream |
 | LocalStack | `:4566` | S3 archive seam | Bucket `banking-forms-submissions`; endpoint `http://localhost:4566`, creds `test`/`test` |
+| MCP server | `:3100` | LLM agent form suggest/fill | Cursor stdio or `docker compose --profile mcp`; see [`MCP_TECHNICAL_GUIDE.md`](MCP_TECHNICAL_GUIDE.md) |
 
 First Ollama start pulls models (~GB); monitor with `docker compose logs -f ollama-init`.
 
@@ -94,6 +105,7 @@ banking-forms-platform/
 ├── module-notification/        # M-NOTIFY     — multi-channel customer notifications (email/WhatsApp), outbox
 ├── module-downstream/          # M-DOWNSTREAM  — pluggable downstream connectors + transactional outbox
 ├── module-analytics/           # M-ANALYTICS   — sanitized payload export (CSV/JSON)
+├── mcp-server/                 # MCP-AGENT     — LLM agent bridge (MCP tools → consumer API)
 ├── docs/                       # documentation
 └── frontend/                   # FE — React monorepo (apps + packages)
 ```
@@ -280,7 +292,7 @@ Runs the automated post-submit pipeline and exposes a report for admins.
 | AOP | `PipelineMetricsAspect` — records pipeline duration/outcome |
 | Logging | `RequestLoggingFilter` — structured `http_request` logs with MDC (`tenantId`, `method`, `path`, `status`, `durationMs`); skips actuator/swagger |
 
-**Ops stack:** `docker-compose.observability.yml` (Prometheus `:9090` + Grafana `:3000`) scrapes `/actuator/prometheus`. *Implements:* `US-9.2`.
+**Ops stack:** `docker-compose.yml --profile observability` (Prometheus `:9090` + Grafana `:3000`, login `admin/admin`) scrapes `/actuator/prometheus`. On Mac Docker Desktop, `docker-up.sh --obs` auto-sets `PROMETHEUS_SCRAPE_HOST` to the host LAN IP (required because `host.docker.internal:8080` is unreachable from containers). Pre-provisioned Grafana dashboard: **Banking Forms Platform** (pipeline runs, HTTP rate, downstream/notification API traffic). Backend binds `0.0.0.0:8080` for container scrape. *Implements:* `US-9.2`.
 
 ---
 
@@ -347,18 +359,36 @@ Delivers the PII-scrubbed submission payload to external systems after pipeline 
 |------|---------|
 | SPI (`spi/`) | `DownstreamConnector` (`connectorId()` + `connectorType()` + `dispatch(OutboundEnvelope, ConnectorConfig)`), `OutboundEnvelope`, `DispatchResult`, `ConnectorConfig`, `ConnectorTypes` (`log`/`rest`/`kafka`/`s3`) |
 | Application | `DownstreamDispatchService` (enqueue in pipeline tx + `dispatch` + retry/DLQ), `DownstreamConnectorRouter` (fan-out to enabled providers), `DownstreamDispatcher` (`@Scheduled` outbox drain), `DownstreamSettingsService`; `DownstreamProperties` (`downstream.*`) |
-| Domain / Infra | `DownstreamProvider`, `OutboxEvent` (+ `OutboxStatus`), repositories; in-JVM connectors `LogDownstreamConnector` (`log-sink`, default) + `RestDownstreamConnector` (`rest-webhook`) |
+| Domain / Infra | `DownstreamProvider`, `OutboxEvent` (+ `OutboxStatus`), repositories; in-JVM connectors `LogDownstreamConnector` (`log-sink`, default) + `RestDownstreamConnector` (`rest-webhook`) + `KafkaDownstreamConnector` (`kafka-stream`) |
+
+**Dev UAT:** `./scripts/configure-dev-downstream.sh` enables `rest-webhook` (→ `webhook-sink` on `:8099`) and `kafka-stream` (→ `localhost:9092` / `submissions.processed`). Auto-run when using `./scripts/start-all-dev.sh --obs`.
 
 **Flow:** Pipeline step 4 calls `DownstreamDispatchService.enqueueForSubmission` → one `downstream_outbox` row (`PENDING`) per enabled provider → `@Scheduled` dispatcher delivers via connector: `DISPATCHED` on success, retry with linear backoff up to `downstream.max-attempts`, then dead-letter to `FAILED`. Timeline: `DOWNSTREAM_QUEUED/DISPATCHED/FAILED/SKIPPED`. **Fail-safe** — never affects submit/review.
 
 **Config:** `downstream.enabled` (default `true`), `downstream.max-attempts` (default `3`), `downstream.dispatch-interval-ms` (default `5000`), `downstream.retry-backoff-ms` (default `10000`). Secrets via `secretRef`. *Implements:* `US-8.1`.
 
-### 5.13 Component ID quick reference (analytics & observability)
+### 5.13 Component ID quick reference (analytics, observability, MCP)
 
-| ID | Module | Key API |
-|----|--------|---------|
+| ID | Module | Key API / entry |
+|----|--------|-----------------|
 | M-ANALYTICS | `module-analytics/` | `GET /api/admin/v1/analytics/export` |
-| M-OBSERV | `module-observability/` | `/actuator/prometheus`, `docker-compose.observability.yml` |
+| M-OBSERV | `module-observability/` | `/actuator/prometheus`, `docker-compose.yml --profile observability` |
+| MCP-AGENT | `mcp-server/` | MCP tools → consumer API; UAT: [`MCP_TECHNICAL_GUIDE.md`](MCP_TECHNICAL_GUIDE.md) |
+
+### 5.14 `MCP-AGENT` — MCP Server (`mcp-server/`) — Phase 5
+
+TypeScript MCP server that exposes banking form operations as **LLM agent tools**. Proxies the consumer BFF — no duplicate business logic.
+
+| Kind | Location |
+|------|----------|
+| MCP tools | `src/server.ts` — `list_forms`, `get_form_definition`, `suggest_forms`, `fill_from_conversation`, `submit_submission`, … |
+| Platform client | `src/client/banking-api.ts` — REST with `X-Tenant-Id` / `X-Dev-User-Id` |
+| NLU | `src/services/intent-matcher.ts` |
+| Entity extraction | `src/services/entity-extractor.ts` |
+| Field mapping | `src/services/field-mapper.ts`, `form-schema.ts` |
+| Transports | stdio (`src/index.ts`) for Cursor; HTTP (`src/http.ts`, Docker profile `mcp`) |
+
+**UAT & run-all commands:** [`MCP_TECHNICAL_GUIDE.md`](MCP_TECHNICAL_GUIDE.md). Architecture: [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md).
 
 ---
 

@@ -49,6 +49,7 @@
 | E8 | Advanced Integrations | Connectors, eventing, AI, notifications | M5 (Phase 3) | ✅ |
 | E9 | Security & Observability Hardening | OIDC, dashboards, testing, analytics | M6 (Phase 4) | 🟡 (OIDC deferred to final phase) |
 | E10 | Form Import (AI-assisted) | Import a form from PDF/CSV/XLS/HTML/URL/image via configurable extractors + human review | M4.5 (Phase 3) | ✅ (🟡 hosted-LLM seam) |
+| E11 | MCP Agent Integration | LLM agents suggest & fill forms via MCP | M7.5 (Phase 5) | ✅ |
 
 ---
 
@@ -214,7 +215,7 @@
 
 - **US-8.1 — Downstream connectors** ✅ · `module-downstream`, `M-PIPELINE`, `BFF-ADMIN`, `FE-ADMIN` — deliver the PII-scrubbed submission payload to configurable downstream destinations with a durable transactional outbox.
   - **AC1** — On pipeline completion, `DownstreamDispatchService` fans out one `downstream_outbox` row (`PENDING`) per enabled provider with an implementation; enqueue runs in the **same transaction** as the pipeline advance.
-  - **AC2** — Providers are **configurable & data-driven** (`downstream_provider` registry + `DownstreamConnector` SPI): `log-sink` (zero-setup default), `rest-webhook` (JDK HttpClient), `kafka-stream`/`s3-archive` (disabled seams). Managed from admin **Settings → Downstream**.
+  - **AC2** — Providers are **configurable & data-driven** (`downstream_provider` registry + `DownstreamConnector` SPI): `log-sink` (zero-setup default), `rest-webhook` (JDK HttpClient), `kafka-stream` (Kafka producer), `s3-archive` (disabled seam). Managed from admin **Settings → Downstream**.
   - **AC3** — Async dispatch via `@Scheduled` dispatcher; retries with linear backoff → dead-letter (`FAILED`); delivery logged to submission timeline (`DOWNSTREAM_QUEUED/DISPATCHED/FAILED/SKIPPED`).
   - **AC4** — **Fail-safe:** downstream errors never fail submit/review; payload is always PII-scrubbed; secrets via `secretRef`.
   - *(Future: Kafka/S3 adapters in `module-service-integration`, per-form routing rules, delivery-status webhooks.)*
@@ -355,9 +356,10 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | **M4.5** | Form Import + AI eval + Notifications (Phase 3) | E10, E8 (US-8.3, US-8.5) | Import a form from PDF/CSV/XLS/HTML/URL/image via configurable providers + human review; advisory AI risk evaluation; multi-channel customer notifications (email/WhatsApp) | ✅ |
 | **M5** | Advanced Integrations (Phase 3) | E8 | Downstream connectors, async pipeline, service adapters, AI evaluation, notifications | ✅ |
 | **M6** | Observability & Hardening (Phase 4) | E9 (US-9.2–9.4) | Metrics/dashboards, analytics export, load/security baselines | ✅ |
+| **M7.5** | MCP Agent Integration (Phase 5) | E11 | LLM agents suggest/fill forms via MCP tools | ✅ |
 | **M7** | Production Auth (final phase) | E9 (US-9.1) | OIDC live, RBAC enforced | ⏳ |
 
-**Current state:** M1–M6 complete. **Phase 3 closed** (`phase-3`): form import, AI evaluation, notifications, downstream connectors, async pipeline, service adapters. **Phase 4 closed** (`phase-4`): observability, analytics export, load/security testing. **Final phase:** OIDC auth & RBAC (US-9.1).
+**Current state:** M1–M6 + **M7.5 (Phase 5 MCP)** complete on `phase5-mcp`. Phases 3–4 closed on `phase-3` / `phase-4`. **Remaining:** M7 OIDC auth & RBAC (final phase).
 
 ---
 
@@ -381,9 +383,11 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | 2 | Form retrieval tools | `list_forms`, `get_form_definition` + agent flat-field schema | ✅ |
 | 3 | Form suggestion | NLU intent matcher + `suggest_forms`, `evaluate_discovery` | ✅ |
 | 4 | Form filling | Entity extraction, field mapping, `fill_from_conversation`, confirmation gate | ✅ |
-| 5 | Testing | Unit tests + [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) | ✅ |
+| 5 | Testing | Unit tests + [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) + [`MCP_TECHNICAL_GUIDE.md`](MCP_TECHNICAL_GUIDE.md) (UAT) | ✅ |
+| 6 | Dev stack scripts | `start-all-dev.sh`, `stop-all-dev.sh`, `run-mcp-stdio.sh`, project `.cursor/mcp.json` | ✅ |
+| 7 | Observability UAT | Grafana dashboard, Prometheus LAN-IP scrape fix, downstream dev config script | ✅ |
 
-**Current state:** Phase 5 MCP feature complete on `phase5-mcp`. Final phase (M7): OIDC auth & RBAC.
+**Run all servers:** `./scripts/start-all-dev.sh --obs --mcp` — see MCP technical guide for UAT checklist.
 
 ---
 
@@ -402,7 +406,7 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | R1 | Auth still dev-headers | Blocks production | US-9.1 (OIDC) before any real deployment |
 | R2 | Synchronous pipeline | Latency/throughput ceiling | US-8.2 async outbox + worker (default); sync mode available via `pipeline.process-mode=sync` |
 | R3 | Visual builder is a stub | Author friction | US-2.5; JSON editor mitigates now |
-| R4 | Kafka/S3 downstream adapters | REST + log sink implemented; broker/object-store adapters pending | Add `KafkaDownstreamConnector` / `S3DownstreamConnector` in `module-service-integration` (US-8.1 AC2 seams already seeded) |
+| R4 | S3 downstream adapter | Kafka + REST + log implemented; S3 seam pending | Add `S3DownstreamConnector` using LocalStack in dev (US-8.1 AC2 seam already seeded) |
 | A1 | Single shared DB acceptable at current scale | — | Read replicas; revisit DB-per-tenant later |
 | D1 | OIDC IdP availability | Gates US-9.1 | Coordinate with security/infra |
 

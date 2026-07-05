@@ -3,6 +3,9 @@
 **Branch:** `phase5-mcp`  
 **Purpose:** Enable LLM agents (Cursor, Claude Desktop, custom bots) to suggest and fill banking forms programmatically via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), without users navigating the consumer portal.
 
+> **UAT & run-all-servers:** [`MCP_TECHNICAL_GUIDE.md`](MCP_TECHNICAL_GUIDE.md)  
+> **Platform overview:** [`TECHNICAL_GUIDE.md`](TECHNICAL_GUIDE.md) §5.14
+
 ---
 
 ## Architecture
@@ -19,6 +22,20 @@ LLM Agent (Cursor / Claude / custom)
 ```
 
 The MCP server is a thin **agent bridge** — it does not duplicate business logic. All persistence, validation, and pipeline processing remain in the Spring Boot monolith.
+
+---
+
+## Quick start
+
+```bash
+# Full stack (backend + frontends + docker + optional MCP HTTP)
+./scripts/start-all-dev.sh --mcp
+
+# MCP only needs backend + stdio config in Cursor:
+./gradlew bootRun
+cd mcp-server && npm install && npm run build
+# → project MCP config: .cursor/mcp.json (see MCP_TECHNICAL_GUIDE.md §4)
+```
 
 ---
 
@@ -39,51 +56,7 @@ The MCP server is a thin **agent bridge** — it does not duplicate business log
 
 ---
 
-## Quick Start
-
-### 1. Backend running
-
-```bash
-./gradlew bootRun   # :8080
-```
-
-### 2. Build MCP server
-
-```bash
-cd mcp-server && npm install && npm run build && npm test
-```
-
-### 3. Cursor / Claude Desktop (stdio)
-
-Copy `mcp-server/cursor-mcp.example.json` into your MCP config and adjust paths:
-
-```json
-{
-  "mcpServers": {
-    "banking-forms": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-server/dist/index.js"],
-      "env": {
-        "BANKING_API_URL": "http://localhost:8080",
-        "BANKING_TENANT_ID": "11111111-1111-1111-1111-111111111111",
-        "BANKING_USER_ID": "44444444-4444-4444-4444-444444444444"
-      }
-    }
-  }
-}
-```
-
-### 4. HTTP mode (Docker)
-
-```bash
-export MCP_API_KEY=dev-mcp-key
-docker compose --profile mcp up -d mcp-server
-# MCP endpoint: http://localhost:3100/mcp  (Bearer dev-mcp-key)
-```
-
----
-
-## Agent Workflow Example
+## Agent workflow example
 
 1. User: *"I want a personal loan for $25,000, my name is Jane Doe"*
 2. Agent calls `suggest_forms` → `LOAN_APPLICATION`
@@ -107,7 +80,7 @@ Production: replace dev headers with OIDC (final phase US-9.1).
 
 ---
 
-## Environment Variables
+## Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -120,30 +93,12 @@ Production: replace dev headers with OIDC (final phase US-9.1).
 
 ---
 
-## Task Completion Status
+## Task completion status
 
-### Phase 1: MCP Server Setup ✅
-- [✔] Task 1.1 — Docker + npm package provisioned
-- [✔] Task 1.2 — `@modelcontextprotocol/sdk` server (stdio + HTTP)
-- [✔] Task 1.3 — Bearer auth on HTTP endpoints
-
-### Phase 2: Form Retrieval API ✅
-- [✔] Task 2.1 — Agent form schema (`AgentFormDefinition` + flat fields)
-- [✔] Task 2.2 — `list_forms`, `get_form_definition` tools
-- [✔] Task 2.3 — Structured error responses on all tools
-
-### Phase 3: Form Suggestion ✅
-- [✔] Task 3.1 — NLU intent matcher (`intent-matcher.ts`)
-- [✔] Task 3.2 — Integration with form catalog + discovery API
-- [✔] Task 3.3 — `suggest_forms` tool with ranked recommendations
-
-### Phase 4: Form Filling ✅
-- [✔] Task 4.1 — Entity extractor (`entity-extractor.ts`)
-- [✔] Task 4.2 — Field mapper (`field-mapper.ts`)
-- [✔] Task 4.3 — `fill_from_conversation`, `save_section` tools
-- [✔] Task 4.4 — `preview_prefill` + `submit_submission(confirmed=true)` gate
-
-### Phase 5: Testing ✅
-- [✔] Task 5.1 — Unit tests (intent, entities, field mapping)
-- [✔] Task 5.2 — Documented end-to-end agent workflow
-- [ ] Task 5.3 — UAT (manual — run with Cursor MCP config)
+| Phase | Status |
+|-------|--------|
+| 1 — MCP server setup | ✅ |
+| 2 — Form retrieval | ✅ |
+| 3 — Form suggestion | ✅ |
+| 4 — Form filling + confirmation | ✅ |
+| 5 — Unit tests + UAT guide | ✅ ([`MCP_TECHNICAL_GUIDE.md`](MCP_TECHNICAL_GUIDE.md)) |
