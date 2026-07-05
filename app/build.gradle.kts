@@ -1,5 +1,6 @@
 plugins {
     id("org.springframework.boot")
+    id("org.owasp.dependencycheck")
 }
 
 dependencies {
@@ -30,6 +31,7 @@ dependencies {
     implementation("org.flywaydb:flyway-mysql")
     runtimeOnly("com.mysql:mysql-connector-j")
     runtimeOnly("com.h2database:h2")
+    runtimeOnly("io.micrometer:micrometer-registry-prometheus")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }

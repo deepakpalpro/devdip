@@ -1430,11 +1430,11 @@ flowchart TB
 - [x] Form import (multi-source + Ollama vision)
 - [x] AI evaluation step (heuristic + optional Ollama)
 
-### Phase 4 — Observability & Hardening (Weeks 13–16) ⏳
-- [ ] Metrics, tracing, Prometheus/Grafana dashboards
-- [ ] Analytics export (sanitized payloads)
-- [ ] Security audit, load testing, dependency scanning
-- [ ] Documentation + runbooks
+### Phase 4 — Observability & Hardening (Weeks 13–16) ✅
+- [x] Metrics, structured logging, Prometheus/Grafana dashboards
+- [x] Analytics export (sanitized payloads)
+- [x] Load-test baseline + OWASP dependency scanning
+- [x] Documentation + runbooks (TECHNICAL_GUIDE, scripts)
 
 ### Phase 5 — Production Auth (final) ⏳
 - [ ] OIDC authentication & RBAC (US-9.1)

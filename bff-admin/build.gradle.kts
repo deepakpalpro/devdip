@@ -17,4 +17,5 @@ dependencies {
     implementation(project(":module-notification"))
     implementation(project(":module-downstream"))
     implementation(project(":module-service-integration"))
+    implementation(project(":module-analytics"))
 }

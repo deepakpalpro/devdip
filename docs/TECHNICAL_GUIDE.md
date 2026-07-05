@@ -23,6 +23,13 @@ Each component below is tagged with a **Component ID** (e.g. `M-FORMDEF`) so use
 cd frontend && npm install
 npm run dev:consumer                     # http://localhost:5173
 npm run dev:admin                        # http://localhost:5174
+
+# Observability (optional — backend must be running on :8080)
+docker compose -f docker-compose.observability.yml up   # Prometheus :9090, Grafana :3000 (admin/admin)
+
+# Load & security baselines (US-9.3)
+./scripts/load-test.sh                   # health-check load baseline
+./scripts/security-scan.sh               # OWASP dependency-check report
 ```
 
 - Dev tenant id (seeded): `11111111-1111-1111-1111-111111111111` (sent as `X-Tenant-Id`).
@@ -63,11 +70,11 @@ banking-forms-platform/
 ├── module-pipeline/            # M-PIPELINE   — automated processing orchestration
 ├── module-transformation/      # M-TRANSFORM  — PII scrubbing
 ├── module-processing/          # M-PROCESSING — manual review state machine
-├── module-observability/       # M-OBSERV     — metrics/tracing config
+├── module-observability/       # M-OBSERV     — metrics, structured logging, Prometheus
 ├── module-service-integration/ # M-SVCINT     — external/AI provider adapters (Ollama vision, WhatsApp Cloud)
 ├── module-notification/        # M-NOTIFY     — multi-channel customer notifications (email/WhatsApp), outbox
 ├── module-downstream/          # M-DOWNSTREAM  — pluggable downstream connectors + transactional outbox
-├── module-analytics/           # (placeholder — Phase 5)
+├── module-analytics/           # M-ANALYTICS   — sanitized payload export (CSV/JSON)
 ├── docs/                       # documentation
 └── frontend/                   # FE — React monorepo (apps + packages)
 ```
@@ -247,7 +254,24 @@ Runs the automated post-submit pipeline and exposes a report for admins.
 ---
 
 ### 5.8 `M-OBSERV` — Observability (`module-observability`)
-- `ObservabilityConfig` — Micrometer/metrics wiring seed. Dashboards, tracing, alerting are Phase 5. *Implements:* `US-9.2` (partial).
+| Kind | Classes |
+|------|---------|
+| Config | `ObservabilityConfig` — Micrometer common tags |
+| Metrics | `PlatformMetrics` — counters/timers for pipeline runs + HTTP requests |
+| AOP | `PipelineMetricsAspect` — records pipeline duration/outcome |
+| Logging | `RequestLoggingFilter` — structured `http_request` logs with MDC (`tenantId`, `method`, `path`, `status`, `durationMs`); skips actuator/swagger |
+
+**Ops stack:** `docker-compose.observability.yml` (Prometheus `:9090` + Grafana `:3000`) scrapes `/actuator/prometheus`. *Implements:* `US-9.2`.
+
+---
+
+### 5.8a `M-ANALYTICS` — Analytics Export (`module-analytics`)
+| Kind | Classes |
+|------|---------|
+| Application | `AnalyticsExportService` — reads **sanitized** payloads only (never raw PII), flattens nested section data, exports CSV/JSON |
+| Application | `AnalyticsRecordView`, `AnalyticsExportException` |
+
+**Admin API:** `GET /api/admin/v1/analytics/records`, `GET /api/admin/v1/analytics/export?format=csv|json`. *Implements:* `US-9.4`.
 
 ---
 
@@ -310,8 +334,12 @@ Delivers the PII-scrubbed submission payload to external systems after pipeline 
 
 **Config:** `downstream.enabled` (default `true`), `downstream.max-attempts` (default `3`), `downstream.dispatch-interval-ms` (default `5000`), `downstream.retry-backoff-ms` (default `10000`). Secrets via `secretRef`. *Implements:* `US-8.1`.
 
-### 5.13 Placeholder modules
-`module-analytics` is scaffolded (build file only) for Phase 4/5 analytics export. *Maps to:* planned analytics features.
+### 5.13 Component ID quick reference (analytics & observability)
+
+| ID | Module | Key API |
+|----|--------|---------|
+| M-ANALYTICS | `module-analytics/` | `GET /api/admin/v1/analytics/export` |
+| M-OBSERV | `module-observability/` | `/actuator/prometheus`, `docker-compose.observability.yml` |
 
 ---
 

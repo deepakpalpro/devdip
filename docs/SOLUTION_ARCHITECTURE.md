@@ -240,8 +240,8 @@ graph TB
 | Real downstream connectors (Kafka/S3 adapters) | ⏳ Planned (REST + log sink done; Kafka/S3 seams seeded) |
 | Event-driven pipeline (outbox → async worker) | ✅ Implemented (default async; sync fallback; broker SPI seam) |
 | AI evaluator, service-integration adapters | ✅ Implemented (SERVICE_CALL step + adapter registry) |
-| Analytics export | ⏳ Phase 4 (US-9.4) |
-| Observability dashboards, load/security testing | ⏳ Phase 4 (US-9.2, US-9.3) |
+| Analytics export | ✅ Phase 4 (US-9.4) — CSV/JSON from sanitized payloads |
+| Observability dashboards, load/security testing | ✅ Phase 4 (US-9.2, US-9.3) — Prometheus/Grafana, load-test + OWASP scan scripts |
 
 *(Delivery mapping in [`PROJECT_MANAGEMENT.md`](PROJECT_MANAGEMENT.md).)*
 

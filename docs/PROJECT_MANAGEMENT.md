@@ -47,7 +47,7 @@
 | E6 | Processing Pipeline | Validate → PII scrub → downstream | M4 | ✅ |
 | E7 | Admin Review & Operations | Queue, review, audit, pipeline report | M4 | ✅ |
 | E8 | Advanced Integrations | Connectors, eventing, AI, notifications | M5 (Phase 3) | ✅ |
-| E9 | Security & Observability Hardening | OIDC, dashboards, testing, analytics | M5/M6 | 🟡 (OIDC deferred to final phase) |
+| E9 | Security & Observability Hardening | OIDC, dashboards, testing, analytics | M6 (Phase 4) | 🟡 (OIDC deferred to final phase) |
 | E10 | Form Import (AI-assisted) | Import a form from PDF/CSV/XLS/HTML/URL/image via configurable extractors + human review | M4.5 (Phase 3) | ✅ (🟡 hosted-LLM seam) |
 
 ---
@@ -266,9 +266,9 @@
 ### E9 — Security & Observability Hardening (M5/M6) ⏳
 
 - **US-9.1 — OIDC authentication & RBAC** ⏳ · `APP-CORE` (`SecurityConfig`), `M-IDENTITY` — replace dev headers with JWT/OIDC + role enforcement.
-- **US-9.2 — Observability** 🟡 · `M-OBSERV` — metrics/tracing/structured logs, Grafana dashboards, alerts.
-- **US-9.3 — Load & security testing** ⏳ — performance baselines, pen-test, dependency scanning.
-- **US-9.4 — Analytics export** ⏳ · `module-analytics` — export from sanitized payloads.
+- **US-9.2 — Observability** ✅ · `M-OBSERV` — platform metrics (pipeline runs, HTTP requests), structured request logging (MDC), Prometheus scrape endpoint, Grafana docker-compose.
+- **US-9.3 — Load & security testing** ✅ — `scripts/load-test.sh` baseline, OWASP `dependencyCheckAnalyze` Gradle task, `scripts/security-scan.sh`.
+- **US-9.4 — Analytics export** ✅ · `module-analytics` — export sanitized submission payloads (CSV/JSON) via `GET /api/admin/v1/analytics/export`.
 
 ---
 
@@ -314,9 +314,9 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | US-8.4 | Service adapters | module-service-integration | ✅ | S8 |
 | US-8.5 | Customer notifications (email/WhatsApp) | module-notification, module-service-integration, BFF-ADMIN, FE-ADMIN | ✅ | S6.7 |
 | US-9.1 | OIDC auth & RBAC | APP-CORE, M-IDENTITY | ⏳ | S7 |
-| US-9.2 | Observability | M-OBSERV | 🟡 | S8 |
-| US-9.3 | Load & security testing | (cross-cutting) | ⏳ | S8 |
-| US-9.4 | Analytics export | module-analytics | ⏳ | S8 |
+| US-9.2 | Observability | M-OBSERV | ✅ | S8 |
+| US-9.3 | Load & security testing | (cross-cutting) | ✅ | S8 |
+| US-9.4 | Analytics export | module-analytics | ✅ | S8 |
 | US-10.1 | Import form from document | M-FORMIMPORT, BFF-ADMIN, FE-ADMIN | ✅ | S6.5 |
 | US-10.2 | Configurable extraction providers | M-FORMIMPORT, BFF-ADMIN, FE-ADMIN | ✅ | S6.5 |
 | US-10.3 | Import from image (AI/vision) | M-SVCINT, M-FORMIMPORT | ✅ / 🟡 | S6.5 |
@@ -338,7 +338,7 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | **S6.6** | AI evaluation step (pluggable evaluator, heuristic + Ollama) — Phase 3 | US-8.3 | M4.5 | ✅ Done |
 | **S6.7** | Customer notifications (email/WhatsApp, configurable providers, outbox + async dispatch) — Phase 3 | US-8.5 | M4.5 | ✅ Done |
 | **S7** | Downstream connectors + async pipeline + service adapters — Phase 3 | US-8.1, US-8.2, US-8.4 | M5 | ✅ Done |
-| **S8** | Observability, analytics export, load/security testing — Phase 4 | US-9.2, US-9.3, US-9.4 | M6 | ⏳ Planned |
+| **S8** | Observability, analytics export, load/security testing — Phase 4 | US-9.2, US-9.3, US-9.4 | M6 | ✅ Done |
 | **S9** | OIDC auth & RBAC — final phase | US-9.1 | M5 | ⏳ Planned |
 | **S10** | Visual drag-and-drop builder (optional) | US-2.5 | M2+ | ⏳ Planned |
 
@@ -354,10 +354,10 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | **M4** | Processing & Review | E6, E7 | Automated pipeline + auditable review workflow | ✅ |
 | **M4.5** | Form Import + AI eval + Notifications (Phase 3) | E10, E8 (US-8.3, US-8.5) | Import a form from PDF/CSV/XLS/HTML/URL/image via configurable providers + human review; advisory AI risk evaluation; multi-channel customer notifications (email/WhatsApp) | ✅ |
 | **M5** | Advanced Integrations (Phase 3) | E8 | Downstream connectors, async pipeline, service adapters, AI evaluation, notifications | ✅ |
-| **M6** | Observability & Hardening (Phase 4) | E9 (US-9.2–9.4) | Metrics/dashboards, analytics export, load/security baselines | ⏳ |
+| **M6** | Observability & Hardening (Phase 4) | E9 (US-9.2–9.4) | Metrics/dashboards, analytics export, load/security baselines | ✅ |
 | **M7** | Production Auth (final phase) | E9 (US-9.1) | OIDC live, RBAC enforced | ⏳ |
 
-**Current state:** M1–M5 complete. **Phase 3 closed** (`phase-3` branch): form import, AI evaluation, notifications, downstream connectors, async pipeline, service adapters. **Phase 4** (`phase-4` branch): observability, analytics export, load/security testing. **Final phase:** OIDC auth & RBAC (US-9.1).
+**Current state:** M1–M6 complete. **Phase 3 closed** (`phase-3`): form import, AI evaluation, notifications, downstream connectors, async pipeline, service adapters. **Phase 4 closed** (`phase-4`): observability, analytics export, load/security testing. **Final phase:** OIDC auth & RBAC (US-9.1).
 
 ---
 
@@ -365,9 +365,9 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 
 | # | Story | Deliverable | Status |
 |---|-------|-------------|--------|
-| 1 | US-9.2 | Platform metrics (pipeline, submissions, outbox), structured request logging, Prometheus scrape + Grafana docker-compose | ⏳ |
-| 2 | US-9.4 | `module-analytics` — export sanitized submission data (CSV/JSON) via admin API | ⏳ |
-| 3 | US-9.3 | Load-test script, OWASP dependency-check Gradle task, baseline security doc | ⏳ |
+| 1 | US-9.2 | Platform metrics (pipeline, submissions, outbox), structured request logging, Prometheus scrape + Grafana docker-compose | ✅ |
+| 2 | US-9.4 | `module-analytics` — export sanitized submission data (CSV/JSON) via admin API | ✅ |
+| 3 | US-9.3 | Load-test script, OWASP dependency-check Gradle task, baseline security doc | ✅ |
 
 **Out of scope for Phase 4:** US-9.1 OIDC (final phase), US-2.5 visual builder (optional later), Kafka/S3 adapter implementations (future seams).
 
