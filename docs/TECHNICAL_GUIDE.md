@@ -19,13 +19,18 @@ Each component below is tagged with a **Component ID** (e.g. `M-FORMDEF`) so use
 ./gradlew bootRun                        # http://localhost:8080
 # Health: GET /actuator/health   |   API docs: /swagger-ui.html
 
+# Local integrations (Ollama, Kafka, LocalStack) — optional, for AI/vision + future connectors
+cp .env.example .env                     # reference env vars
+./scripts/docker-up.sh                   # ollama :11434, kafka :9092, localstack :4566
+./scripts/docker-up.sh --obs             # + Prometheus :9090, Grafana :3000
+
 # Frontend (npm workspaces monorepo)
 cd frontend && npm install
 npm run dev:consumer                     # http://localhost:5173
 npm run dev:admin                        # http://localhost:5174
 
-# Observability (optional — backend must be running on :8080)
-docker compose -f docker-compose.observability.yml up   # Prometheus :9090, Grafana :3000 (admin/admin)
+# Observability only (or use ./scripts/docker-up.sh --obs for full stack)
+docker compose --profile observability up -d   # Prometheus :9090, Grafana :3000 (admin/admin)
 
 # Load & security baselines (US-9.3)
 ./scripts/load-test.sh                   # health-check load baseline
@@ -35,6 +40,16 @@ docker compose -f docker-compose.observability.yml up   # Prometheus :9090, Graf
 - Dev tenant id (seeded): `11111111-1111-1111-1111-111111111111` (sent as `X-Tenant-Id`).
 - Dev user id (default): `44444444-4444-4444-4444-444444444444` (optional `X-Dev-User-Id`).
 - MySQL profile: `SPRING_PROFILES_ACTIVE=mysql DB_HOST=localhost DB_NAME=banking_forms ./gradlew bootRun`.
+
+**Docker integrations (`docker-compose.yml`)**
+
+| Service | Port | Purpose | App config |
+|---------|------|---------|------------|
+| Ollama | `:11434` | Vision form import (`llava`) + AI eval (`llama3.2`) | Enable `ollama-vision` in Settings → Import; optional `--args='--pipeline.ai.evaluator=ollama'` |
+| Kafka | `:9092` | Downstream `kafka-stream` seam | Topic `submissions.processed` auto-created; set `bootstrapServers` in Settings → Downstream |
+| LocalStack | `:4566` | S3 archive seam | Bucket `banking-forms-submissions`; endpoint `http://localhost:4566`, creds `test`/`test` |
+
+First Ollama start pulls models (~GB); monitor with `docker compose logs -f ollama-init`.
 
 ---
 
