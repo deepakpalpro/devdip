@@ -35,6 +35,10 @@ docker compose --profile observability up -d   # Prometheus :9090, Grafana :3000
 # Load & security baselines (US-9.3)
 ./scripts/load-test.sh                   # health-check load baseline
 ./scripts/security-scan.sh               # OWASP dependency-check report
+
+# MCP server (LLM agent bridge — see docs/MCP_INTEGRATION.md)
+cd mcp-server && npm install && npm run build
+docker compose --profile mcp up -d         # HTTP MCP on :3100
 ```
 
 - Dev tenant id (seeded): `11111111-1111-1111-1111-111111111111` (sent as `X-Tenant-Id`).

@@ -1,0 +1,16 @@
+# MCP Server — LLM agent integration for banking forms
+# See docs/MCP_INTEGRATION.md
+
+{
+  "mcpServers": {
+    "banking-forms": {
+      "command": "node",
+      "args": ["mcp-server/dist/index.js"],
+      "env": {
+        "BANKING_API_URL": "http://localhost:8080",
+        "BANKING_TENANT_ID": "11111111-1111-1111-1111-111111111111",
+        "BANKING_USER_ID": "44444444-4444-4444-4444-444444444444"
+      }
+    }
+  }
+}

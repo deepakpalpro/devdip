@@ -373,6 +373,20 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 
 ---
 
+## 7.2 Phase 5 Plan — MCP Agent Integration (`phase5-mcp`)
+
+| # | Task | Deliverable | Status |
+|---|------|-------------|--------|
+| 1 | MCP server setup | `mcp-server/` npm package, stdio + HTTP transport, Docker profile | ✅ |
+| 2 | Form retrieval tools | `list_forms`, `get_form_definition` + agent flat-field schema | ✅ |
+| 3 | Form suggestion | NLU intent matcher + `suggest_forms`, `evaluate_discovery` | ✅ |
+| 4 | Form filling | Entity extraction, field mapping, `fill_from_conversation`, confirmation gate | ✅ |
+| 5 | Testing | Unit tests + [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) | ✅ |
+
+**Current state:** Phase 5 MCP feature complete on `phase5-mcp`. Final phase (M7): OIDC auth & RBAC.
+
+---
+
 ## 8. Definition of Ready / Done
 
 **Definition of Ready (story):** clear user value; acceptance criteria written; dependencies known; component(s) identified; estimable; test approach agreed.
