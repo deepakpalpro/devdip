@@ -46,8 +46,8 @@
 | E5 | Consumer Application Lifecycle | List, resume, track status | M3 | ✅ |
 | E6 | Processing Pipeline | Validate → PII scrub → downstream | M4 | ✅ |
 | E7 | Admin Review & Operations | Queue, review, audit, pipeline report | M4 | ✅ |
-| E8 | Advanced Integrations | Connectors, eventing, AI, notifications | M5 | 🟡 (AI evaluation + notifications done) |
-| E9 | Security & Observability Hardening | OIDC, dashboards, testing, analytics | M5/M6 | ⏳ |
+| E8 | Advanced Integrations | Connectors, eventing, AI, notifications | M5 (Phase 3) | ✅ |
+| E9 | Security & Observability Hardening | OIDC, dashboards, testing, analytics | M5/M6 | 🟡 (OIDC deferred to final phase) |
 | E10 | Form Import (AI-assisted) | Import a form from PDF/CSV/XLS/HTML/URL/image via configurable extractors + human review | M4.5 (Phase 3) | ✅ (🟡 hosted-LLM seam) |
 
 ---
@@ -189,7 +189,7 @@
 > As the *platform*, I want downstream dispatch that never fails the customer's submit.
 - **AC1** Success → `PENDING_REVIEW`, `PIPELINE_COMPLETED`.
 - **AC2** Failure → submission reverts to `SUBMITTED`, execution `FAILED` with error details, `PIPELINE_FAILED` event.
-- *(Real connectors delivered in US-8.1.)*
+- *(Real connectors delivered in US-8.1; REST + log-sink live, Kafka/S3 seams seeded.)*
 
 ### E7 — Admin Review & Operations (M4) ✅
 
@@ -210,7 +210,7 @@
 > As a *reviewer/ops*, I want to see pipeline execution + sanitized payload.
 - **AC1** `GET /submissions/{id}/pipeline` returns execution status, current step, transformed fields.
 
-### E8 — Advanced Integrations (M5) ⏳
+### E8 — Advanced Integrations (M5 / Phase 3) ✅
 
 - **US-8.1 — Downstream connectors** ✅ · `module-downstream`, `M-PIPELINE`, `BFF-ADMIN`, `FE-ADMIN` — deliver the PII-scrubbed submission payload to configurable downstream destinations with a durable transactional outbox.
   - **AC1** — On pipeline completion, `DownstreamDispatchService` fans out one `downstream_outbox` row (`PENDING`) per enabled provider with an implementation; enqueue runs in the **same transaction** as the pipeline advance.
@@ -303,7 +303,7 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | US-5.3 | Track status | FE-CONSUMER | ✅ | S4 |
 | US-6.1 | Validate step | M-PIPELINE, M-SUBMISSION | ✅ | S5 |
 | US-6.2 | PII scrub step | M-PIPELINE, M-TRANSFORM | ✅ | S5 |
-| US-6.3 | Downstream + fail-safe | M-PIPELINE | ✅ / 🟡 | S5 |
+| US-6.3 | Downstream + fail-safe | M-PIPELINE | ✅ | S5 |
 | US-7.1 | Audit timeline | M-SUBMISSION | ✅ | S6 |
 | US-7.2 | Review queue & detail | M-PROCESSING, BFF-ADMIN, FE-ADMIN | ✅ | S6 |
 | US-7.3 | Review decisions | M-PROCESSING | ✅ | S6 |
@@ -337,8 +337,10 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | **S6.5** | Form import (multi-source, configurable providers, Ollama vision) — Phase 3 | US-10.1 … US-10.4 | M4.5 | ✅ Done |
 | **S6.6** | AI evaluation step (pluggable evaluator, heuristic + Ollama) — Phase 3 | US-8.3 | M4.5 | ✅ Done |
 | **S6.7** | Customer notifications (email/WhatsApp, configurable providers, outbox + async dispatch) — Phase 3 | US-8.5 | M4.5 | ✅ Done |
-| **S7** | OIDC auth + real downstream + eventing | US-9.1, US-8.1, US-8.2 | M5 | ⏳ Planned |
-| **S8** | Service adapters, analytics, observability, hardening + visual builder | US-8.4, US-9.2–9.4, US-2.5 | M5/M6 | ⏳ Planned |
+| **S7** | Downstream connectors + async pipeline + service adapters — Phase 3 | US-8.1, US-8.2, US-8.4 | M5 | ✅ Done |
+| **S8** | Observability, analytics export, load/security testing — Phase 4 | US-9.2, US-9.3, US-9.4 | M6 | ⏳ Planned |
+| **S9** | OIDC auth & RBAC — final phase | US-9.1 | M5 | ⏳ Planned |
+| **S10** | Visual drag-and-drop builder (optional) | US-2.5 | M2+ | ⏳ Planned |
 
 ---
 
@@ -351,10 +353,23 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | **M3** | Consumer Experience | E3, E5 | Discovery + resumable drafts + status tracking | ✅ |
 | **M4** | Processing & Review | E6, E7 | Automated pipeline + auditable review workflow | ✅ |
 | **M4.5** | Form Import + AI eval + Notifications (Phase 3) | E10, E8 (US-8.3, US-8.5) | Import a form from PDF/CSV/XLS/HTML/URL/image via configurable providers + human review; advisory AI risk evaluation; multi-channel customer notifications (email/WhatsApp) | ✅ |
-| **M5** | Integrations & Security | E8 (part), E9 (part) | OIDC live, real downstream connector, async pipeline | ⏳ |
-| **M6** | Observability & Hardening | E9 | Dashboards, alerting, load/security tested, analytics | ⏳ |
+| **M5** | Advanced Integrations (Phase 3) | E8 | Downstream connectors, async pipeline, service adapters, AI evaluation, notifications | ✅ |
+| **M6** | Observability & Hardening (Phase 4) | E9 (US-9.2–9.4) | Metrics/dashboards, analytics export, load/security baselines | ⏳ |
+| **M7** | Production Auth (final phase) | E9 (US-9.1) | OIDC live, RBAC enforced | ⏳ |
 
-**Current state:** M1–M4 complete (MVP feature-complete for the core lifecycle); M4.5 (Phase 3: Form Import + AI evaluation + Customer Notifications) complete. M5–M6 planned.
+**Current state:** M1–M5 complete. **Phase 3 closed** (`phase-3` branch): form import, AI evaluation, notifications, downstream connectors, async pipeline, service adapters. **Phase 4** (`phase-4` branch): observability, analytics export, load/security testing. **Final phase:** OIDC auth & RBAC (US-9.1).
+
+---
+
+## 7.1 Phase 4 Plan (Observability & Hardening — OIDC deferred)
+
+| # | Story | Deliverable | Status |
+|---|-------|-------------|--------|
+| 1 | US-9.2 | Platform metrics (pipeline, submissions, outbox), structured request logging, Prometheus scrape + Grafana docker-compose | ⏳ |
+| 2 | US-9.4 | `module-analytics` — export sanitized submission data (CSV/JSON) via admin API | ⏳ |
+| 3 | US-9.3 | Load-test script, OWASP dependency-check Gradle task, baseline security doc | ⏳ |
+
+**Out of scope for Phase 4:** US-9.1 OIDC (final phase), US-2.5 visual builder (optional later), Kafka/S3 adapter implementations (future seams).
 
 ---
 

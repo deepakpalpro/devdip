@@ -236,12 +236,12 @@ graph TB
 | Manual review workflow + audit timeline + pipeline report | ✅ Implemented |
 | Form import (multi-source, configurable providers, human-in-the-loop) | ✅ Implemented (PDF/CSV/XLS/HTML/URL in-JVM; image via local Ollama vision) |
 | Customer notifications (email/WhatsApp, configurable providers, outbox + async dispatch) | ✅ Implemented (email `log-email` default + `smtp-email`; WhatsApp Cloud opt-in; retries/DLQ + delivery webhook) |
-| OIDC auth | ⏳ Planned |
-| Real downstream connectors (Kafka/S3 adapters) | ⏳ Planned (REST + log sink done) |
+| OIDC auth | ⏳ Final phase (US-9.1) |
+| Real downstream connectors (Kafka/S3 adapters) | ⏳ Planned (REST + log sink done; Kafka/S3 seams seeded) |
 | Event-driven pipeline (outbox → async worker) | ✅ Implemented (default async; sync fallback; broker SPI seam) |
 | AI evaluator, service-integration adapters | ✅ Implemented (SERVICE_CALL step + adapter registry) |
-| Analytics export | ⏳ Planned |
-| Observability dashboards, load/security testing | ⏳ Planned |
+| Analytics export | ⏳ Phase 4 (US-9.4) |
+| Observability dashboards, load/security testing | ⏳ Phase 4 (US-9.2, US-9.3) |
 
 *(Delivery mapping in [`PROJECT_MANAGEMENT.md`](PROJECT_MANAGEMENT.md).)*
 
@@ -252,7 +252,7 @@ graph TB
 | Risk / Debt | Impact | Mitigation |
 |-------------|--------|-----------|
 | Dev-header auth still in place | Not production-safe | Implement OIDC (`SecurityConfig` ready) before any real deployment |
-| Synchronous pipeline | Submit latency, no retry at scale | Move to outbox + async workers |
-| Visual form builder is a stub | Admins must edit raw JSON | Build drag-drop builder (`FE-PKG-BUILDER`) |
-| Downstream/AI/notifications are placeholders | No external side-effects yet | Implement connectors behind existing interfaces |
+| Synchronous pipeline | Submit latency, no retry at scale | ✅ Resolved — async outbox + worker (US-8.2); sync fallback via `pipeline.process-mode=sync` |
+| Visual form builder is a stub | Admins must edit raw JSON | Build drag-drop builder (`FE-PKG-BUILDER`) — optional later |
+| Downstream/AI/notifications are placeholders | No external side-effects yet | ✅ Connectors/adapters implemented; Kafka/S3/credit/identity seams remain |
 | Single shared DB | Blast radius / tenant scale ceiling | Read replicas now; DB-per-tenant option later |

@@ -1420,23 +1420,26 @@ flowchart TB
 - [ ] Form renderer + section-wise submission
 - [ ] Draft persistence + final submit
 
-### Phase 3 — Processing Pipeline (Weeks 9–12)
-- [ ] Event framework + outbox pattern
-- [ ] Pipeline orchestrator (validate, notify)
-- [ ] Status management + admin review queue
-- [x] Notification module (multi-channel email/WhatsApp, configurable providers, outbox + async dispatch — see §5.11)
+### Phase 3 — Processing Pipeline & Integrations (Weeks 9–12) ✅
+- [x] Event framework + outbox pattern
+- [x] Pipeline orchestrator (validate, PII scrub, AI evaluate, service call, downstream)
+- [x] Status management + admin review queue
+- [x] Notification module (multi-channel email/WhatsApp, configurable providers, outbox + async dispatch)
+- [x] Downstream connectors (log + REST, transactional outbox)
+- [x] Service-integration adapters (log + REST)
+- [x] Form import (multi-source + Ollama vision)
+- [x] AI evaluation step (heuristic + optional Ollama)
 
-### Phase 4 — Advanced Integrations (Weeks 13–16)
-- [x] PII scrubbing pipeline
-- [x] AI evaluator interface + default (heuristic) adapter + optional Ollama adapter
-- [ ] Service integration layer
-- [ ] Downstream connectors (Kafka, S3, REST)
-
-### Phase 5 — Observability & Hardening (Weeks 17–20)
-- [ ] Metrics, tracing, dashboards
-- [ ] Analytics export
-- [ ] Security audit, load testing
+### Phase 4 — Observability & Hardening (Weeks 13–16) ⏳
+- [ ] Metrics, tracing, Prometheus/Grafana dashboards
+- [ ] Analytics export (sanitized payloads)
+- [ ] Security audit, load testing, dependency scanning
 - [ ] Documentation + runbooks
+
+### Phase 5 — Production Auth (final) ⏳
+- [ ] OIDC authentication & RBAC (US-9.1)
+- [ ] Visual drag-and-drop form builder (optional — US-2.5)
+- [ ] Kafka/S3 downstream adapters (future seams)
 
 ---
 
