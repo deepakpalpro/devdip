@@ -65,6 +65,60 @@ export interface CreateFormRequest {
   storageStrategy?: 'JSON_BLOB' | 'KEY_VALUE';
 }
 
+export type PipelineTrigger = 'ON_SUBMIT' | 'ON_APPROVED' | 'ON_REJECTED' | 'ON_STATUS_CHANGE';
+
+export interface PipeletDefinition {
+  code: string;
+  name: string;
+  description: string | null;
+  configSchema: Record<string, unknown> | null;
+  enabled: boolean;
+  available: boolean;
+}
+
+export interface PipelineDefinitionSummary {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  version: number;
+  status: string;
+  systemDefault: boolean;
+}
+
+export interface PipelineStepDefinition {
+  id: string;
+  stepOrder: number;
+  stepKey: string;
+  pipeletCode: string;
+  properties: Record<string, unknown> | null;
+}
+
+export interface PipelineDefinitionDetail {
+  definition: PipelineDefinitionSummary;
+  steps: PipelineStepDefinition[];
+}
+
+export interface PipelineStepRequest {
+  stepKey: string;
+  pipeletCode: string;
+  properties?: Record<string, unknown> | null;
+}
+
+export interface FormPipelineBinding {
+  id: string;
+  formVersionId: string;
+  pipelineDefinitionId: string;
+  trigger: PipelineTrigger;
+  enabled: boolean;
+}
+
+export interface UpsertPipelineBindingRequest {
+  pipelineId: string;
+  trigger: PipelineTrigger;
+  enabled: boolean;
+}
+
 export interface ImportConfidence {
   overall: number;
   source: string;
@@ -459,6 +513,31 @@ export function createApiClient(config: ApiClientConfig = {}) {
       }),
     getSubmissionPipeline: (submissionId: string) =>
       request<PipelineReport>(`/api/admin/v1/submissions/${submissionId}/pipeline`, config),
+    listPipelets: () => request<PipeletDefinition[]>('/api/admin/v1/pipelets', config),
+    listPipelines: () => request<PipelineDefinitionSummary[]>('/api/admin/v1/pipelines', config),
+    getPipeline: (pipelineId: string) =>
+      request<PipelineDefinitionDetail>(`/api/admin/v1/pipelines/${pipelineId}`, config),
+    updatePipelineSteps: (pipelineId: string, steps: PipelineStepRequest[]) =>
+      request<PipelineDefinitionDetail>(`/api/admin/v1/pipelines/${pipelineId}/steps`, config, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ steps }),
+      }),
+    listFormPipelineBindings: (formId: string, versionId: string) =>
+      request<FormPipelineBinding[]>(
+        `/api/admin/v1/forms/${formId}/versions/${versionId}/pipeline-bindings`,
+        config,
+      ),
+    upsertFormPipelineBinding: (formId: string, versionId: string, body: UpsertPipelineBindingRequest) =>
+      request<FormPipelineBinding>(
+        `/api/admin/v1/forms/${formId}/versions/${versionId}/pipeline-bindings`,
+        config,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      ),
     getQuestionnaire: (code: string) =>
       request<QuestionnaireDetail>(`/api/consumer/v1/discovery/${encodeURIComponent(code)}`, config),
     evaluateDiscovery: (code: string, answers: Record<string, unknown>) =>

@@ -10,4 +10,19 @@ public record ServiceCallContext(
         String formCode,
         Map<String, Map<String, Object>> sanitizedPayload,
         String riskRecommendation,
-        Double riskScore) {}
+        Double riskScore,
+        UUID formVersionId,
+        UUID pipelineDefinitionId,
+        UUID pipelineStepId) {
+
+    /** Backward-compatible constructor without scoped resolution fields. */
+    public ServiceCallContext(
+            UUID tenantId,
+            UUID submissionId,
+            String formCode,
+            Map<String, Map<String, Object>> sanitizedPayload,
+            String riskRecommendation,
+            Double riskScore) {
+        this(tenantId, submissionId, formCode, sanitizedPayload, riskRecommendation, riskScore, null, null, null);
+    }
+}

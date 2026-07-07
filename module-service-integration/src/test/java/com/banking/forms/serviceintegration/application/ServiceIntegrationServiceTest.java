@@ -30,6 +30,7 @@ class ServiceIntegrationServiceTest {
     private static final UUID SUBMISSION = UUID.randomUUID();
 
     @Mock private ServiceAdapterRouter adapterRouter;
+    @Mock private ServiceInstanceResolver instanceResolver;
     @Mock private ServiceCallLogRepository callLogRepository;
     @Mock private SubmissionEventRecorder eventRecorder;
     @Mock private ServiceAdapter adapter;
@@ -41,7 +42,7 @@ class ServiceIntegrationServiceTest {
     void setUp() {
         properties = new ServiceIntegrationProperties();
         service = new ServiceIntegrationService(
-                adapterRouter, callLogRepository, eventRecorder, properties, new ObjectMapper());
+                adapterRouter, instanceResolver, callLogRepository, eventRecorder, properties, new ObjectMapper());
     }
 
     @Test

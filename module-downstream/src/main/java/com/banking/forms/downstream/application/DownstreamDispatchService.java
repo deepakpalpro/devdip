@@ -62,12 +62,30 @@ public class DownstreamDispatchService {
             Map<String, Map<String, Object>> sanitizedPayload,
             String riskRecommendation,
             Double riskScore) {
+        return enqueueForSubmission(
+                tenantId, submissionId, formCode, sanitizedPayload, riskRecommendation, riskScore, null);
+    }
+
+    @Transactional
+    public int enqueueForSubmission(
+            UUID tenantId,
+            UUID submissionId,
+            String formCode,
+            Map<String, Map<String, Object>> sanitizedPayload,
+            String riskRecommendation,
+            Double riskScore,
+            List<String> connectorCodes) {
         if (!properties.isEnabled()) {
             recordTimeline(submissionId, "DOWNSTREAM_SKIPPED", Map.of("reason", "disabled"));
             return 0;
         }
 
         List<DownstreamConnectorRouter.Selection> providers = connectorRouter.resolveAllEnabled();
+        if (connectorCodes != null && !connectorCodes.isEmpty()) {
+            providers = providers.stream()
+                    .filter(selection -> connectorCodes.contains(selection.providerCode()))
+                    .toList();
+        }
         if (providers.isEmpty()) {
             recordTimeline(submissionId, "DOWNSTREAM_SKIPPED", Map.of("reason", "no-provider"));
             return 0;

@@ -7,6 +7,7 @@ import com.banking.forms.formimport.application.FormImportException;
 import com.banking.forms.formimport.application.FormImportNotFoundException;
 import com.banking.forms.notification.application.NotificationException;
 import com.banking.forms.downstream.application.DownstreamException;
+import com.banking.forms.pipeline.application.PipelineConfigurationException;
 import com.banking.forms.serviceintegration.application.ServiceIntegrationException;
 import com.banking.forms.submission.application.SubmissionNotFoundException;
 import com.banking.forms.submission.application.SubmissionValidationException;
@@ -65,6 +66,11 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(ServiceIntegrationException.class)
     ResponseEntity<SimpleError> handleServiceIntegration(ServiceIntegrationException ex) {
+        return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
+    }
+
+    @ExceptionHandler(PipelineConfigurationException.class)
+    ResponseEntity<SimpleError> handlePipelineConfig(PipelineConfigurationException ex) {
         return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
     }
 

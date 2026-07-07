@@ -29,6 +29,7 @@ public class ServiceIntegrationService implements ServiceCallExecutor {
     private static final UUID SYSTEM_ACTOR = new UUID(0L, 0L);
 
     private final ServiceAdapterRouter adapterRouter;
+    private final ServiceInstanceResolver instanceResolver;
     private final ServiceCallLogRepository callLogRepository;
     private final SubmissionEventRecorder eventRecorder;
     private final ServiceIntegrationProperties properties;
@@ -36,11 +37,13 @@ public class ServiceIntegrationService implements ServiceCallExecutor {
 
     public ServiceIntegrationService(
             ServiceAdapterRouter adapterRouter,
+            ServiceInstanceResolver instanceResolver,
             ServiceCallLogRepository callLogRepository,
             SubmissionEventRecorder eventRecorder,
             ServiceIntegrationProperties properties,
             ObjectMapper objectMapper) {
         this.adapterRouter = adapterRouter;
+        this.instanceResolver = instanceResolver;
         this.callLogRepository = callLogRepository;
         this.eventRecorder = eventRecorder;
         this.properties = properties;
@@ -60,7 +63,7 @@ public class ServiceIntegrationService implements ServiceCallExecutor {
             return 0;
         }
 
-        List<ServiceAdapterRouter.Selection> providers = adapterRouter.resolveAllEnabled();
+        List<ServiceAdapterRouter.Selection> providers = resolveProviders(context);
         if (providers.isEmpty()) {
             recordTimeline(context.submissionId(), "SERVICE_CALL_SKIPPED", Map.of("reason", "no-provider"));
             return 0;
@@ -78,6 +81,19 @@ public class ServiceIntegrationService implements ServiceCallExecutor {
         }
         recordTimeline(context.submissionId(), "SERVICE_CALL_COMPLETED", Map.of("invoked", invoked));
         return invoked;
+    }
+
+    private List<ServiceAdapterRouter.Selection> resolveProviders(ServiceCallContext context) {
+        if (context.formVersionId() != null
+                || context.pipelineDefinitionId() != null
+                || context.pipelineStepId() != null) {
+            return instanceResolver.resolve(
+                    context.tenantId(),
+                    context.formVersionId(),
+                    context.pipelineDefinitionId(),
+                    context.pipelineStepId());
+        }
+        return adapterRouter.resolveAllEnabled();
     }
 
     private void invokeOne(
