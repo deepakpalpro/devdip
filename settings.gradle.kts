@@ -4,6 +4,7 @@ include(
     "app",
     "bff-consumer",
     "bff-admin",
+    "bff-collection",
     "module-identity",
     "module-form-definition",
     "module-form-import",
@@ -15,6 +16,7 @@ include(
     "module-downstream",
     "module-notification",
     "module-analytics",
+    "module-collection",
     "module-observability",
     "module-pipeline",
 )

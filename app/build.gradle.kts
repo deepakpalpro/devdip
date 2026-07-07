@@ -6,6 +6,8 @@ plugins {
 dependencies {
     implementation(project(":bff-consumer"))
     implementation(project(":bff-admin"))
+    implementation(project(":bff-collection"))
+    implementation(project(":module-collection"))
     implementation(project(":module-identity"))
     implementation(project(":module-form-definition"))
     implementation(project(":module-form-import"))

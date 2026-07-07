@@ -18,4 +18,5 @@ dependencies {
     implementation(project(":module-downstream"))
     implementation(project(":module-service-integration"))
     implementation(project(":module-analytics"))
+    implementation(project(":module-collection"))
 }

@@ -1,5 +1,6 @@
 package com.banking.forms.app.config;
 
+import com.banking.forms.collection.application.CollectionException;
 import com.banking.forms.formdefinition.application.FormConflictException;
 import com.banking.forms.formdefinition.application.FormNotFoundException;
 import com.banking.forms.formdefinition.application.FormSchemaException;
@@ -71,6 +72,11 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(PipelineConfigurationException.class)
     ResponseEntity<SimpleError> handlePipelineConfig(PipelineConfigurationException ex) {
+        return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
+    }
+
+    @ExceptionHandler(CollectionException.class)
+    ResponseEntity<SimpleError> handleCollection(CollectionException ex) {
         return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
     }
 

@@ -34,6 +34,16 @@ public class SecurityConfig {
 
     @Bean
     @Order(2)
+    SecurityFilterChain collectionSecurity(HttpSecurity http) throws Exception {
+        return http.securityMatcher("/api/collection/**")
+                .csrf(AbstractHttpConfigurer::disable)
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+                .build();
+    }
+
+    @Bean
+    @Order(3)
     SecurityFilterChain apiSecurity(HttpSecurity http) throws Exception {
         return http.securityMatcher("/api/**")
                 .csrf(AbstractHttpConfigurer::disable)
