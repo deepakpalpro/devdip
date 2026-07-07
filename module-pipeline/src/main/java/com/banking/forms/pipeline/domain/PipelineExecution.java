@@ -51,9 +51,13 @@ public class PipelineExecution {
     protected PipelineExecution() {}
 
     public PipelineExecution(UUID id, UUID submissionId) {
+        this(id, submissionId, SYSTEM_CONFIG_ID);
+    }
+
+    public PipelineExecution(UUID id, UUID submissionId, UUID pipelineDefinitionId) {
         this.id = id;
         this.submissionId = submissionId;
-        this.pipelineConfigId = SYSTEM_CONFIG_ID;
+        this.pipelineConfigId = pipelineDefinitionId;
         this.status = RUNNING;
         this.currentStep = 0;
         this.startedAt = Instant.now();
@@ -78,6 +82,10 @@ public class PipelineExecution {
 
     public UUID getId() {
         return id;
+    }
+
+    public UUID getPipelineConfigId() {
+        return pipelineConfigId;
     }
 
     public UUID getSubmissionId() {

@@ -10,7 +10,13 @@ dependencies {
 
     implementation(project(":module-identity"))
     implementation(project(":module-form-definition"))
+    implementation(project(":module-form-import"))
     implementation(project(":module-submission"))
     implementation(project(":module-processing"))
     implementation(project(":module-pipeline"))
+    implementation(project(":module-notification"))
+    implementation(project(":module-downstream"))
+    implementation(project(":module-service-integration"))
+    implementation(project(":module-analytics"))
+    implementation(project(":module-collection"))
 }

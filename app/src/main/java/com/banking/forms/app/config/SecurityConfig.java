@@ -34,11 +34,24 @@ public class SecurityConfig {
 
     @Bean
     @Order(2)
+    SecurityFilterChain collectionSecurity(HttpSecurity http) throws Exception {
+        return http.securityMatcher("/api/collection/**")
+                .csrf(AbstractHttpConfigurer::disable)
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+                .build();
+    }
+
+    @Bean
+    @Order(3)
     SecurityFilterChain apiSecurity(HttpSecurity http) throws Exception {
         return http.securityMatcher("/api/**")
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // Provider delivery-status callbacks are unauthenticated at the gateway; the real
+                        // control is per-provider signature verification (see NotificationWebhookController).
+                        .requestMatchers("/api/webhooks/**").permitAll()
                         .requestMatchers("/api/consumer/v1/**").hasAnyRole("CONSUMER", "ADMIN")
                         .requestMatchers("/api/admin/v1/**").hasAnyRole("ADMIN", "REVIEWER", "SUPER_ADMIN")
                         .anyRequest().authenticated())

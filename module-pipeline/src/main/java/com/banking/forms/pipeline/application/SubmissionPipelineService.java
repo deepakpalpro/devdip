@@ -1,25 +1,18 @@
 package com.banking.forms.pipeline.application;
 
 import com.banking.forms.formdefinition.application.FormQueryService;
-import com.banking.forms.formdefinition.application.PublishedFormView;
+import com.banking.forms.pipeline.domain.AiEvaluation;
 import com.banking.forms.pipeline.domain.PipelineExecution;
+import com.banking.forms.pipeline.domain.PipelineTrigger;
 import com.banking.forms.pipeline.domain.SanitizedPayload;
+import com.banking.forms.pipeline.infrastructure.AiEvaluationRepository;
 import com.banking.forms.pipeline.infrastructure.PipelineExecutionRepository;
 import com.banking.forms.pipeline.infrastructure.SanitizedPayloadRepository;
-import com.banking.forms.submission.application.SectionStorageRouter;
-import com.banking.forms.submission.application.SectionValidator;
-import com.banking.forms.submission.application.SubmissionEventRecorder;
 import com.banking.forms.submission.application.SubmissionNotFoundException;
-import com.banking.forms.submission.application.SubmissionValidationException;
 import com.banking.forms.submission.domain.Submission;
-import com.banking.forms.submission.domain.SubmissionStatus;
 import com.banking.forms.submission.infrastructure.SubmissionRepository;
-import com.banking.forms.transformation.application.PiiScrubber;
-import com.banking.forms.transformation.application.ScrubResult;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -27,103 +20,55 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Runs the automated processing pipeline after a submission is submitted:
- * {@code VALIDATE → PII_SCRUB → DOWNSTREAM}, advancing the submission
- * {@code SUBMITTED → VALIDATING → PROCESSING → PENDING_REVIEW} and recording every step in the
- * submission audit timeline. Failures are captured (not thrown): the submission is reverted to
- * SUBMITTED and the run is marked FAILED, so a submit request never fails because of the pipeline.
+ * Entry point for automated pipeline runs. Resolves the configured pipeline for the submission's
+ * form version and delegates step execution to {@link PipelineOrchestrator}.
  */
 @Service
 public class SubmissionPipelineService {
 
-    private static final UUID SYSTEM_ACTOR = new UUID(0L, 0L);
-    private static final int TOTAL_STEPS = 3;
+    private static final int LEGACY_TOTAL_STEPS = 5;
 
     private final SubmissionRepository submissionRepository;
-    private final SectionStorageRouter sectionStorageRouter;
-    private final SectionValidator sectionValidator;
-    private final FormQueryService formQueryService;
-    private final SubmissionEventRecorder eventRecorder;
-    private final PiiScrubber piiScrubber;
+    private final FormPipelineResolver pipelineResolver;
+    private final PipelineOrchestrator orchestrator;
     private final PipelineExecutionRepository executionRepository;
     private final SanitizedPayloadRepository sanitizedPayloadRepository;
+    private final AiEvaluationRepository aiEvaluationRepository;
     private final ObjectMapper objectMapper;
 
     public SubmissionPipelineService(
             SubmissionRepository submissionRepository,
-            SectionStorageRouter sectionStorageRouter,
-            SectionValidator sectionValidator,
-            FormQueryService formQueryService,
-            SubmissionEventRecorder eventRecorder,
-            PiiScrubber piiScrubber,
+            FormPipelineResolver pipelineResolver,
+            PipelineOrchestrator orchestrator,
             PipelineExecutionRepository executionRepository,
             SanitizedPayloadRepository sanitizedPayloadRepository,
+            AiEvaluationRepository aiEvaluationRepository,
             ObjectMapper objectMapper) {
         this.submissionRepository = submissionRepository;
-        this.sectionStorageRouter = sectionStorageRouter;
-        this.sectionValidator = sectionValidator;
-        this.formQueryService = formQueryService;
-        this.eventRecorder = eventRecorder;
-        this.piiScrubber = piiScrubber;
+        this.pipelineResolver = pipelineResolver;
+        this.orchestrator = orchestrator;
         this.executionRepository = executionRepository;
         this.sanitizedPayloadRepository = sanitizedPayloadRepository;
+        this.aiEvaluationRepository = aiEvaluationRepository;
         this.objectMapper = objectMapper;
     }
 
     @Transactional
     public PipelineResult process(UUID tenantId, UUID submissionId) {
         Submission submission = loadOwned(tenantId, submissionId);
-        if (submission.getStatus() != SubmissionStatus.SUBMITTED) {
-            return PipelineResult.skipped(submission.getStatus().name());
-        }
+        ResolvedPipeline pipeline = pipelineResolver
+                .resolve(tenantId, submission.getFormVersionId(), PipelineTrigger.ON_SUBMIT)
+                .orElseThrow(() -> new PipelineConfigurationException("No submit pipeline configured"));
+        return orchestrator.execute(tenantId, submissionId, pipeline, PipelineTrigger.ON_SUBMIT);
+    }
 
-        PipelineExecution execution = executionRepository.save(new PipelineExecution(UUID.randomUUID(), submissionId));
-        record(submissionId, "PIPELINE_STARTED", payload("steps", "VALIDATE,PII_SCRUB,DOWNSTREAM"));
-
-        try {
-            PublishedFormView form = formQueryService
-                    .findPublishedByVersionId(submission.getFormVersionId())
-                    .orElseThrow(() -> new SubmissionValidationException("Published form version not available"));
-
-            // Step 1 — VALIDATE (server-side defense in depth)
-            submission.markValidating(Instant.now());
-            submissionRepository.save(submission);
-            Map<String, Map<String, Object>> sectionData =
-                    sectionStorageRouter.resolve(form.storageStrategy()).loadAllSections(submissionId);
-            sectionValidator.validateAllSections(form.schema(), sectionData);
-            execution.advanceTo(1);
-            record(submissionId, "VALIDATED", payload("sections", sectionData.size()));
-
-            // Step 2 — PII_SCRUB (sanitized copy for AI / analytics / downstream)
-            submission.markProcessing(Instant.now());
-            submissionRepository.save(submission);
-            ScrubResult scrub = piiScrubber.scrub(form.code(), sectionData);
-            persistSanitized(submissionId, scrub);
-            execution.advanceTo(2);
-            record(submissionId, "PII_SCRUBBED", payload("transformedFields", scrub.transformedCount()));
-
-            // Step 3 — DOWNSTREAM (stubbed dispatch of the sanitized payload)
-            record(submissionId, "DOWNSTREAM_DISPATCHED",
-                    payload("target", "ANALYTICS_STREAM", "fields", scrub.transformedCount()));
-            execution.advanceTo(TOTAL_STEPS);
-
-            // Automated stages passed → hand off to the manual review queue
-            submission.markUnderReview(Instant.now());
-            submissionRepository.save(submission);
-            execution.complete(TOTAL_STEPS);
-            executionRepository.save(execution);
-            record(submissionId, "PIPELINE_COMPLETED",
-                    payload("to", SubmissionStatus.PENDING_REVIEW.name(), "transformedFields", scrub.transformedCount()));
-            return PipelineResult.completed(scrub.transformedCount());
-        } catch (RuntimeException ex) {
-            String message = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
-            submission.revertToSubmitted(Instant.now());
-            submissionRepository.save(submission);
-            execution.fail(execution.getCurrentStep(), message);
-            executionRepository.save(execution);
-            record(submissionId, "PIPELINE_FAILED", payload("error", message, "atStep", execution.getCurrentStep()));
-            return PipelineResult.failed(message);
-        }
+    @Transactional
+    public PipelineResult processTrigger(UUID tenantId, UUID submissionId, PipelineTrigger trigger) {
+        Submission submission = loadOwned(tenantId, submissionId);
+        return pipelineResolver
+                .resolve(tenantId, submission.getFormVersionId(), trigger)
+                .map(pipeline -> orchestrator.execute(tenantId, submissionId, pipeline, trigger))
+                .orElse(PipelineResult.skipped("no-pipeline"));
     }
 
     @Transactional(readOnly = true)
@@ -137,7 +82,11 @@ public class SubmissionPipelineService {
         Map<String, Map<String, Object>> payload = sanitized == null ? null : readSections(sanitized.getPayloadJson());
         List<TransformedFieldView> transformed =
                 sanitized == null ? List.of() : readTransformed(sanitized.getTransformedJson());
-        return new PipelineReportView(executionView, payload, transformed);
+        AiEvaluationView aiEvaluation = aiEvaluationRepository
+                .findBySubmissionId(submissionId)
+                .map(this::toAiView)
+                .orElse(null);
+        return new PipelineReportView(executionView, payload, transformed, aiEvaluation);
     }
 
     private Submission loadOwned(UUID tenantId, UUID submissionId) {
@@ -147,45 +96,36 @@ public class SubmissionPipelineService {
                 .orElseThrow(() -> new SubmissionNotFoundException(submissionId));
     }
 
-    private void persistSanitized(UUID submissionId, ScrubResult scrub) {
-        String payloadJson = writeJson(scrub.sanitized());
-        String transformedJson = writeJson(scrub.transformed());
-        sanitizedPayloadRepository
-                .findBySubmissionId(submissionId)
-                .ifPresentOrElse(
-                        existing -> existing.update(payloadJson, transformedJson),
-                        () -> sanitizedPayloadRepository.save(
-                                new SanitizedPayload(UUID.randomUUID(), submissionId, payloadJson, transformedJson)));
+    private AiEvaluationView toAiView(AiEvaluation evaluation) {
+        return new AiEvaluationView(
+                evaluation.getEvaluatorId(),
+                evaluation.getModel(),
+                evaluation.getRiskScore(),
+                evaluation.getRecommendation(),
+                evaluation.getRationale(),
+                readSignals(evaluation.getSignalsJson()),
+                evaluation.getCreatedAt());
+    }
+
+    private Map<String, Object> readSignals(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() {});
+        } catch (Exception ex) {
+            return Map.of();
+        }
     }
 
     private PipelineExecutionView toExecutionView(PipelineExecution execution) {
         return new PipelineExecutionView(
                 execution.getStatus(),
                 execution.getCurrentStep(),
-                TOTAL_STEPS,
+                LEGACY_TOTAL_STEPS,
                 execution.getStartedAt(),
                 execution.getCompletedAt(),
                 execution.getErrorDetails());
-    }
-
-    private void record(UUID submissionId, String eventType, Map<String, Object> payload) {
-        eventRecorder.record(submissionId, eventType, payload, SYSTEM_ACTOR);
-    }
-
-    private static Map<String, Object> payload(Object... keyValues) {
-        Map<String, Object> map = new LinkedHashMap<>();
-        for (int i = 0; i + 1 < keyValues.length; i += 2) {
-            map.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
-        }
-        return map;
-    }
-
-    private String writeJson(Object value) {
-        try {
-            return objectMapper.writeValueAsString(value);
-        } catch (Exception ex) {
-            throw new IllegalStateException("Unable to serialize pipeline payload", ex);
-        }
     }
 
     private Map<String, Map<String, Object>> readSections(String json) {

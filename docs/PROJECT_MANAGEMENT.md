@@ -44,10 +44,12 @@
 | E3 | Form Discovery | Triage → recommend → prefill | M3 | ✅ |
 | E4 | Form Filling & Submission | Render, save, validate, submit | M2/M3 | ✅ |
 | E5 | Consumer Application Lifecycle | List, resume, track status | M3 | ✅ |
-| E6 | Processing Pipeline | Validate → PII scrub → downstream | M4 | ✅ (🟡 real downstream) |
+| E6 | Processing Pipeline | Validate → PII scrub → downstream | M4 | ✅ |
 | E7 | Admin Review & Operations | Queue, review, audit, pipeline report | M4 | ✅ |
-| E8 | Advanced Integrations | Connectors, eventing, AI, notifications | M5 | ⏳ |
-| E9 | Security & Observability Hardening | OIDC, dashboards, testing, analytics | M5/M6 | ⏳ |
+| E8 | Advanced Integrations | Connectors, eventing, AI, notifications | M5 (Phase 3) | ✅ |
+| E9 | Security & Observability Hardening | OIDC, dashboards, testing, analytics | M6 (Phase 4) | 🟡 (OIDC deferred to final phase) |
+| E10 | Form Import (AI-assisted) | Import a form from PDF/CSV/XLS/HTML/URL/image via configurable extractors + human review | M4.5 (Phase 3) | ✅ (🟡 hosted-LLM seam) |
+| E11 | MCP Agent Integration | LLM agents suggest & fill forms via MCP | M7.5 (Phase 5) | ✅ |
 
 ---
 
@@ -188,7 +190,7 @@
 > As the *platform*, I want downstream dispatch that never fails the customer's submit.
 - **AC1** Success → `PENDING_REVIEW`, `PIPELINE_COMPLETED`.
 - **AC2** Failure → submission reverts to `SUBMITTED`, execution `FAILED` with error details, `PIPELINE_FAILED` event.
-- *(Real connectors = US-8.1.)*
+- *(Real connectors delivered in US-8.1; REST + log-sink live, Kafka/S3 seams seeded.)*
 
 ### E7 — Admin Review & Operations (M4) ✅
 
@@ -209,20 +211,65 @@
 > As a *reviewer/ops*, I want to see pipeline execution + sanitized payload.
 - **AC1** `GET /submissions/{id}/pipeline` returns execution status, current step, transformed fields.
 
-### E8 — Advanced Integrations (M5) ⏳
+### E8 — Advanced Integrations (M5 / Phase 3) ✅
 
-- **US-8.1 — Downstream connectors** ⏳ · `module-downstream` — real Kafka/S3/REST/core-banking delivery + `outbox_event` reliability.
-- **US-8.2 — Event-driven pipeline** ⏳ · `M-PIPELINE` — outbox → message broker → async step workers.
-- **US-8.3 — AI evaluation step** ⏳ · `module-service-integration`, `M-PIPELINE` — `AI_EVALUATE` via adapter + guardrails.
-- **US-8.4 — Service-integration adapters** ⏳ · `module-service-integration` — external API adapter registry.
-- **US-8.5 — Notifications** ⏳ · `module-notification` — event-triggered customer/staff notifications.
+- **US-8.1 — Downstream connectors** ✅ · `module-downstream`, `M-PIPELINE`, `BFF-ADMIN`, `FE-ADMIN` — deliver the PII-scrubbed submission payload to configurable downstream destinations with a durable transactional outbox.
+  - **AC1** — On pipeline completion, `DownstreamDispatchService` fans out one `downstream_outbox` row (`PENDING`) per enabled provider with an implementation; enqueue runs in the **same transaction** as the pipeline advance.
+  - **AC2** — Providers are **configurable & data-driven** (`downstream_provider` registry + `DownstreamConnector` SPI): `log-sink` (zero-setup default), `rest-webhook` (JDK HttpClient), `kafka-stream` (Kafka producer), `s3-archive` (disabled seam). Managed from admin **Settings → Downstream**.
+  - **AC3** — Async dispatch via `@Scheduled` dispatcher; retries with linear backoff → dead-letter (`FAILED`); delivery logged to submission timeline (`DOWNSTREAM_QUEUED/DISPATCHED/FAILED/SKIPPED`).
+  - **AC4** — **Fail-safe:** downstream errors never fail submit/review; payload is always PII-scrubbed; secrets via `secretRef`.
+  - *(Future: Kafka/S3 adapters in `module-service-integration`, per-form routing rules, delivery-status webhooks.)*
+- **US-8.2 — Event-driven pipeline** ✅ · `M-PIPELINE` — submit enqueues `outbox_event`; `@Scheduled` worker runs pipeline async (broker seam via `PipelineEventPublisher`).
+  - **AC1** — Async mode (default): submit returns `SUBMITTED`; `PipelineLifecycleListener` enqueues `PIPELINE_REQUESTED` in outbox after commit; timeline records `PIPELINE_QUEUED`.
+  - **AC2** — `PipelineOutboxDispatcher` polls unpublished rows every 3s, runs `SubmissionPipelineService.process`, marks published; retries with backoff → dead-letter.
+  - **AC3** — Sync fallback: `pipeline.process-mode=sync` runs pipeline inline (prior behavior).
+  - **AC4** — `PipelineEventPublisher` SPI (`log-inprocess` default); Kafka seam ready for separate worker instances.
+  - *(Future: Kafka consumer workers, idempotent consumer tracking.)*
+- **US-8.3 — AI evaluation step** ✅ · `M-PIPELINE`, `module-service-integration` — `AI_EVALUATE` pipeline step scores the sanitized payload via a pluggable `AiEvaluator` (deterministic `heuristic` default; optional local Ollama). Advisory risk score + `APPROVE`/`REVIEW`/`REJECT` + signals, persisted (`submission_ai_evaluation`) and shown in the pipeline report/timeline. **Fail-safe** (degrades to `REVIEW`) and **human-in-the-loop** (never auto-decides). *(Hosted LLMs / per-form prompts → future.)*
+- **US-8.4 — Service-integration adapters** ✅ · `module-service-integration`, `M-PIPELINE`, `BFF-ADMIN`, `FE-ADMIN` — data-driven external API adapter registry invoked during pipeline SERVICE_CALL.
+  - **AC1** — `ServiceAdapter` SPI + `service_provider` registry + `ServiceAdapterRouter`; fan-out to all enabled providers with implementations on the PII-scrubbed payload.
+  - **AC2** — Providers: `log-service` (default enabled), `rest-api` (JDK HttpClient), `credit-bureau`/`identity-verify` (disabled seams). Admin **Settings → Services**.
+  - **AC3** — Every invocation logged in `service_call_log` + submission timeline (`SERVICE_CALL_*` events). Fail-safe — never fails the pipeline.
+  - **AC4** — `ServiceCallExecutor` pipeline seam in `M-PIPELINE`; implemented by `ServiceIntegrationService` in `M-SVCINT`.
+  - *(Future: Resilience4j circuit breakers, credit-bureau/identity adapter beans, per-form routing overrides.)*
+- **US-8.5 — Customer notifications (email + WhatsApp)** ✅ · `module-notification`, `module-service-integration`, `BFF-ADMIN`, `FE-ADMIN` — notify the customer on submit and on each review decision over email and/or WhatsApp.
+  - **AC1** — On submit (`APPLICATION_SUBMITTED`) and on approve/reject/needs-info decisions, an event is raised (`SubmissionLifecycleEvent`) and a notification is enqueued per eligible channel; the transition and each notification are recorded on the submission timeline.
+  - **AC2** — Providers are **configurable & data-driven** (`notification_provider` registry + `NotificationChannel` SPI): `log-email` (zero-setup default), `smtp-email` (JavaMailSender), `whatsapp-cloud` (Meta Cloud API, in `M-SVCINT`, disabled until configured). Managed from the admin **Settings → Notifications** page (enable/disable, priority, `config_json`).
+  - **AC3** — Templates per (event, channel, locale) with `{{placeholder}}` substitution + built-in fallbacks; recipient (email/phone/consent/locale) resolved from the submission data.
+  - **AC4** — **Reliable & async:** durable outbox (`notification_message`) drained by a `@Scheduled` dispatcher; retries with backoff → dead-letter (`FAILED`); delivery-status webhook (`/api/webhooks/notifications/{provider}`) → `DELIVERED`.
+  - **AC5** — **Advisory + fail-safe & PII-safe:** a notification failure never affects submit/review; recipients masked in logs/views; secrets via `secretRef`; consent enforced when `notifications.require-consent=true`; WhatsApp uses approved templates outside the 24h window.
+  - *(Future: SMS/push channels, per-tenant template CRUD UI, staff/internal notifications, provider signature verification.)*
+
+### E10 — Form Import (AI-assisted) (Phase 3) ✅
+
+**US-10.1 — Import a form from a document** · ✅ · `M-FORMIMPORT`, `BFF-ADMIN`, `FE-ADMIN`
+> As a *form author*, I want to upload a PDF/CSV/XLS/HTML file (or point at a URL) so that a draft form is generated for me instead of building it by hand.
+- **AC1** `POST /form-imports` (file) / `POST /form-imports/from-url` (URL) creates a job; the source type is auto-detected (filename/MIME/URL).
+- **AC2** The right extractor runs (PDFBox/POI/jsoup) and the job reaches `NEEDS_REVIEW` with a mapped schema + confidence signal.
+- **AC3** Duplicate sources are de-duplicated via a source hash.
+
+**US-10.2 — Configurable extraction providers** · ✅ · `M-FORMIMPORT`, `BFF-ADMIN`, `FE-ADMIN`
+> As a *platform admin*, I want to manage which extractor handles each source type so that I can tune/extend extraction without a code change.
+- **AC1** `GET/PUT /form-import-providers` lists providers and updates `enabled`, `priority`, and `config` JSON (Settings page).
+- **AC2** For a source type, the highest-priority **enabled** provider **with an available implementation** is chosen; a provider can be seeded but disabled/unavailable.
+
+**US-10.3 — Import from an image (AI/vision)** · ✅ (🟡 hosted-LLM seam) · `M-SVCINT`, `M-FORMIMPORT`
+> As a *form author*, I want to import a form from a scanned image so that even non-digital forms can be onboarded.
+- **AC1** `ollama-vision` provider sends the (downscaled) image to a local Ollama vision model (`llava`) and returns fields for review.
+- **AC2** Provider is disabled by default and enabled from Settings once Ollama is running; endpoint/model/prompt/timeout are configurable.
+- *(Hosted-LLM `llm-vision` seam exists but is disabled pending a real provider.)*
+
+**US-10.4 — Review & accept an import (human-in-the-loop)** · ✅ · `M-FORMIMPORT`, `M-FORMDEF`, `FE-ADMIN`
+> As a *form author*, I want to review/edit the extracted schema before it becomes a form so that AI output is never trusted blindly.
+- **AC1** Job lands in `NEEDS_REVIEW` (or `FAILED`); `POST /form-imports/{id}/accept` creates a `DRAFT` form (via `M-FORMDEF`) with the reviewed schema.
+- **AC2** Nothing is published automatically — accept only produces a draft for normal authoring/publish.
 
 ### E9 — Security & Observability Hardening (M5/M6) ⏳
 
 - **US-9.1 — OIDC authentication & RBAC** ⏳ · `APP-CORE` (`SecurityConfig`), `M-IDENTITY` — replace dev headers with JWT/OIDC + role enforcement.
-- **US-9.2 — Observability** 🟡 · `M-OBSERV` — metrics/tracing/structured logs, Grafana dashboards, alerts.
-- **US-9.3 — Load & security testing** ⏳ — performance baselines, pen-test, dependency scanning.
-- **US-9.4 — Analytics export** ⏳ · `module-analytics` — export from sanitized payloads.
+- **US-9.2 — Observability** ✅ · `M-OBSERV` — platform metrics (pipeline runs, HTTP requests), structured request logging (MDC), Prometheus scrape endpoint, Grafana docker-compose.
+- **US-9.3 — Load & security testing** ✅ — `scripts/load-test.sh` baseline, OWASP `dependencyCheckAnalyze` Gradle task, `scripts/security-scan.sh`.
+- **US-9.4 — Analytics export** ✅ · `module-analytics` — export sanitized submission payloads (CSV/JSON) via `GET /api/admin/v1/analytics/export`.
 
 ---
 
@@ -257,20 +304,24 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | US-5.3 | Track status | FE-CONSUMER | ✅ | S4 |
 | US-6.1 | Validate step | M-PIPELINE, M-SUBMISSION | ✅ | S5 |
 | US-6.2 | PII scrub step | M-PIPELINE, M-TRANSFORM | ✅ | S5 |
-| US-6.3 | Downstream + fail-safe | M-PIPELINE | ✅ / 🟡 | S5 |
+| US-6.3 | Downstream + fail-safe | M-PIPELINE | ✅ | S5 |
 | US-7.1 | Audit timeline | M-SUBMISSION | ✅ | S6 |
 | US-7.2 | Review queue & detail | M-PROCESSING, BFF-ADMIN, FE-ADMIN | ✅ | S6 |
 | US-7.3 | Review decisions | M-PROCESSING | ✅ | S6 |
 | US-7.4 | Pipeline report | M-PIPELINE, BFF-ADMIN, FE-ADMIN | ✅ | S6 |
-| US-8.1 | Downstream connectors | module-downstream | ⏳ | S7 |
-| US-8.2 | Event-driven pipeline | M-PIPELINE (outbox→broker) | ⏳ | S7 |
-| US-8.3 | AI evaluation | module-service-integration, M-PIPELINE | ⏳ | S8 |
-| US-8.4 | Service adapters | module-service-integration | ⏳ | S8 |
-| US-8.5 | Notifications | module-notification | ⏳ | S8 |
+| US-8.1 | Downstream connectors | module-downstream | ✅ | S7 |
+| US-8.2 | Event-driven pipeline | M-PIPELINE (outbox→worker) | ✅ | S7 |
+| US-8.3 | AI evaluation | M-PIPELINE, module-service-integration | ✅ | S6.6 |
+| US-8.4 | Service adapters | module-service-integration | ✅ | S8 |
+| US-8.5 | Customer notifications (email/WhatsApp) | module-notification, module-service-integration, BFF-ADMIN, FE-ADMIN | ✅ | S6.7 |
 | US-9.1 | OIDC auth & RBAC | APP-CORE, M-IDENTITY | ⏳ | S7 |
-| US-9.2 | Observability | M-OBSERV | 🟡 | S8 |
-| US-9.3 | Load & security testing | (cross-cutting) | ⏳ | S8 |
-| US-9.4 | Analytics export | module-analytics | ⏳ | S8 |
+| US-9.2 | Observability | M-OBSERV | ✅ | S8 |
+| US-9.3 | Load & security testing | (cross-cutting) | ✅ | S8 |
+| US-9.4 | Analytics export | module-analytics | ✅ | S8 |
+| US-10.1 | Import form from document | M-FORMIMPORT, BFF-ADMIN, FE-ADMIN | ✅ | S6.5 |
+| US-10.2 | Configurable extraction providers | M-FORMIMPORT, BFF-ADMIN, FE-ADMIN | ✅ | S6.5 |
+| US-10.3 | Import from image (AI/vision) | M-SVCINT, M-FORMIMPORT | ✅ / 🟡 | S6.5 |
+| US-10.4 | Review & accept import | M-FORMIMPORT, M-FORMDEF, FE-ADMIN | ✅ | S6.5 |
 
 ---
 
@@ -284,8 +335,13 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | **S4** | Consumer application lifecycle | US-5.1 … US-5.3 | M3 | ✅ Done |
 | **S5** | Automated processing pipeline + PII | US-6.1 … US-6.3 | M4 | ✅ Done |
 | **S6** | Admin review workspace + pipeline report | US-7.1 … US-7.4 | M4 | ✅ Done |
-| **S7** | OIDC auth + real downstream + eventing | US-9.1, US-8.1, US-8.2 | M5 | ⏳ Planned |
-| **S8** | AI, notifications, analytics, observability, hardening + visual builder | US-8.3–8.5, US-9.2–9.4, US-2.5 | M5/M6 | ⏳ Planned |
+| **S6.5** | Form import (multi-source, configurable providers, Ollama vision) — Phase 3 | US-10.1 … US-10.4 | M4.5 | ✅ Done |
+| **S6.6** | AI evaluation step (pluggable evaluator, heuristic + Ollama) — Phase 3 | US-8.3 | M4.5 | ✅ Done |
+| **S6.7** | Customer notifications (email/WhatsApp, configurable providers, outbox + async dispatch) — Phase 3 | US-8.5 | M4.5 | ✅ Done |
+| **S7** | Downstream connectors + async pipeline + service adapters — Phase 3 | US-8.1, US-8.2, US-8.4 | M5 | ✅ Done |
+| **S8** | Observability, analytics export, load/security testing — Phase 4 | US-9.2, US-9.3, US-9.4 | M6 | ✅ Done |
+| **S9** | OIDC auth & RBAC — final phase | US-9.1 | M5 | ⏳ Planned |
+| **S10** | Visual drag-and-drop builder (optional) | US-2.5 | M2+ | ⏳ Planned |
 
 ---
 
@@ -297,10 +353,41 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | **M2** | Authoring & Filling | E2, E4 | Author→publish→fill→submit works end-to-end | ✅ |
 | **M3** | Consumer Experience | E3, E5 | Discovery + resumable drafts + status tracking | ✅ |
 | **M4** | Processing & Review | E6, E7 | Automated pipeline + auditable review workflow | ✅ |
-| **M5** | Integrations & Security | E8 (part), E9 (part) | OIDC live, real downstream connector, async pipeline | ⏳ |
-| **M6** | Observability & Hardening | E9 | Dashboards, alerting, load/security tested, analytics | ⏳ |
+| **M4.5** | Form Import + AI eval + Notifications (Phase 3) | E10, E8 (US-8.3, US-8.5) | Import a form from PDF/CSV/XLS/HTML/URL/image via configurable providers + human review; advisory AI risk evaluation; multi-channel customer notifications (email/WhatsApp) | ✅ |
+| **M5** | Advanced Integrations (Phase 3) | E8 | Downstream connectors, async pipeline, service adapters, AI evaluation, notifications | ✅ |
+| **M6** | Observability & Hardening (Phase 4) | E9 (US-9.2–9.4) | Metrics/dashboards, analytics export, load/security baselines | ✅ |
+| **M7.5** | MCP Agent Integration (Phase 5) | E11 | LLM agents suggest/fill forms via MCP tools | ✅ |
+| **M7** | Production Auth (final phase) | E9 (US-9.1) | OIDC live, RBAC enforced | ⏳ |
 
-**Current state:** M1–M4 complete (MVP feature-complete for the core lifecycle). M5–M6 planned.
+**Current state:** M1–M6 + **M7.5 (Phase 5 MCP)** complete on `phase5-mcp`. Phases 3–4 closed on `phase-3` / `phase-4`. **Remaining:** M7 OIDC auth & RBAC (final phase).
+
+---
+
+## 7.1 Phase 4 Plan (Observability & Hardening — OIDC deferred)
+
+| # | Story | Deliverable | Status |
+|---|-------|-------------|--------|
+| 1 | US-9.2 | Platform metrics (pipeline, submissions, outbox), structured request logging, Prometheus scrape + Grafana docker-compose | ✅ |
+| 2 | US-9.4 | `module-analytics` — export sanitized submission data (CSV/JSON) via admin API | ✅ |
+| 3 | US-9.3 | Load-test script, OWASP dependency-check Gradle task, baseline security doc | ✅ |
+
+**Out of scope for Phase 4:** US-9.1 OIDC (final phase), US-2.5 visual builder (optional later), Kafka/S3 adapter implementations (future seams).
+
+---
+
+## 7.2 Phase 5 Plan — MCP Agent Integration (`phase5-mcp`)
+
+| # | Task | Deliverable | Status |
+|---|------|-------------|--------|
+| 1 | MCP server setup | `mcp-server/` npm package, stdio + HTTP transport, Docker profile | ✅ |
+| 2 | Form retrieval tools | `list_forms`, `get_form_definition` + agent flat-field schema | ✅ |
+| 3 | Form suggestion | NLU intent matcher + `suggest_forms`, `evaluate_discovery` | ✅ |
+| 4 | Form filling | Entity extraction, field mapping, `fill_from_conversation`, confirmation gate | ✅ |
+| 5 | Testing | Unit tests + [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) + [`MCP_TECHNICAL_GUIDE.md`](MCP_TECHNICAL_GUIDE.md) (UAT) | ✅ |
+| 6 | Dev stack scripts | `start-all-dev.sh`, `stop-all-dev.sh`, `run-mcp-stdio.sh`, project `.cursor/mcp.json` | ✅ |
+| 7 | Observability UAT | Grafana dashboard, Prometheus LAN-IP scrape fix, downstream dev config script | ✅ |
+
+**Run all servers:** `./scripts/start-all-dev.sh --obs --mcp` — see MCP technical guide for UAT checklist.
 
 ---
 
@@ -317,9 +404,9 @@ Maps each user story to the implementing technical component(s) (see [`TECHNICAL
 | # | Risk / Dependency | Impact | Response |
 |---|-------------------|--------|----------|
 | R1 | Auth still dev-headers | Blocks production | US-9.1 (OIDC) before any real deployment |
-| R2 | Synchronous pipeline | Latency/throughput ceiling | US-8.2 async migration (outbox present) |
+| R2 | Synchronous pipeline | Latency/throughput ceiling | US-8.2 async outbox + worker (default); sync mode available via `pipeline.process-mode=sync` |
 | R3 | Visual builder is a stub | Author friction | US-2.5; JSON editor mitigates now |
-| R4 | Downstream/AI/notifications placeholders | No external effects | US-8.1/8.3/8.5 behind existing interfaces |
+| R4 | S3 downstream adapter | Kafka + REST + log implemented; S3 seam pending | Add `S3DownstreamConnector` using LocalStack in dev (US-8.1 AC2 seam already seeded) |
 | A1 | Single shared DB acceptable at current scale | — | Read replicas; revisit DB-per-tenant later |
 | D1 | OIDC IdP availability | Gates US-9.1 | Coordinate with security/infra |
 

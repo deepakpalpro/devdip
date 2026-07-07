@@ -1,12 +1,16 @@
 plugins {
     id("org.springframework.boot")
+    id("org.owasp.dependencycheck")
 }
 
 dependencies {
     implementation(project(":bff-consumer"))
     implementation(project(":bff-admin"))
+    implementation(project(":bff-collection"))
+    implementation(project(":module-collection"))
     implementation(project(":module-identity"))
     implementation(project(":module-form-definition"))
+    implementation(project(":module-form-import"))
     implementation(project(":module-submission"))
     implementation(project(":module-discovery"))
     implementation(project(":module-processing"))
@@ -29,6 +33,7 @@ dependencies {
     implementation("org.flywaydb:flyway-mysql")
     runtimeOnly("com.mysql:mysql-connector-j")
     runtimeOnly("com.h2database:h2")
+    runtimeOnly("io.micrometer:micrometer-registry-prometheus")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
@@ -39,4 +44,9 @@ tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
 
 tasks.named<Jar>("jar") {
     enabled = false
+}
+
+tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
+    // Docker Desktop (Mac/Win) reaches the host via IPv4 host.docker.internal
+    jvmArgs("-Djava.net.preferIPv4Stack=true")
 }

@@ -73,6 +73,15 @@ public class KeyValueSectionStorage implements SectionStorageStrategy {
         return result;
     }
 
+    @Override
+    public void deleteSections(UUID submissionId) {
+        // Delete field-value leaves first (FK -> submission_section), then the section headers.
+        for (SubmissionSection section : sectionRepository.findBySubmissionId(submissionId)) {
+            fieldValueRepository.deleteBySectionId(section.getId());
+        }
+        sectionRepository.deleteBySubmissionId(submissionId);
+    }
+
     @SuppressWarnings("unchecked")
     private void flatten(String prefix, Map<String, Object> data, Map<String, String> out) {
         for (Map.Entry<String, Object> entry : data.entrySet()) {

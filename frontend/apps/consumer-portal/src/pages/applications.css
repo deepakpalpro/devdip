@@ -32,6 +32,10 @@
   white-space: nowrap;
 }
 
+.bf-applications-table td.bf-app-actions > * + * {
+  margin-left: 0.5rem;
+}
+
 .bf-app-time {
   color: var(--bf-text-muted);
   font-size: 0.85rem;

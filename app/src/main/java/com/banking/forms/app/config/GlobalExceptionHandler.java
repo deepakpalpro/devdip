@@ -1,8 +1,15 @@
 package com.banking.forms.app.config;
 
+import com.banking.forms.collection.application.CollectionException;
 import com.banking.forms.formdefinition.application.FormConflictException;
 import com.banking.forms.formdefinition.application.FormNotFoundException;
 import com.banking.forms.formdefinition.application.FormSchemaException;
+import com.banking.forms.formimport.application.FormImportException;
+import com.banking.forms.formimport.application.FormImportNotFoundException;
+import com.banking.forms.notification.application.NotificationException;
+import com.banking.forms.downstream.application.DownstreamException;
+import com.banking.forms.pipeline.application.PipelineConfigurationException;
+import com.banking.forms.serviceintegration.application.ServiceIntegrationException;
 import com.banking.forms.submission.application.SubmissionNotFoundException;
 import com.banking.forms.submission.application.SubmissionValidationException;
 import org.springframework.http.HttpStatus;
@@ -35,6 +42,41 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(FormSchemaException.class)
     ResponseEntity<SimpleError> handleFormSchema(FormSchemaException ex) {
+        return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
+    }
+
+    @ExceptionHandler(FormImportNotFoundException.class)
+    ResponseEntity<SimpleError> handleImportNotFound(FormImportNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new SimpleError(ex.getMessage()));
+    }
+
+    @ExceptionHandler(FormImportException.class)
+    ResponseEntity<SimpleError> handleImport(FormImportException ex) {
+        return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
+    }
+
+    @ExceptionHandler(NotificationException.class)
+    ResponseEntity<SimpleError> handleNotification(NotificationException ex) {
+        return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
+    }
+
+    @ExceptionHandler(DownstreamException.class)
+    ResponseEntity<SimpleError> handleDownstream(DownstreamException ex) {
+        return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
+    }
+
+    @ExceptionHandler(ServiceIntegrationException.class)
+    ResponseEntity<SimpleError> handleServiceIntegration(ServiceIntegrationException ex) {
+        return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
+    }
+
+    @ExceptionHandler(PipelineConfigurationException.class)
+    ResponseEntity<SimpleError> handlePipelineConfig(PipelineConfigurationException ex) {
+        return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
+    }
+
+    @ExceptionHandler(CollectionException.class)
+    ResponseEntity<SimpleError> handleCollection(CollectionException ex) {
         return ResponseEntity.badRequest().body(new SimpleError(ex.getMessage()));
     }
 

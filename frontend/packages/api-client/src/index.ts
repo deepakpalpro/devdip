@@ -65,6 +65,271 @@ export interface CreateFormRequest {
   storageStrategy?: 'JSON_BLOB' | 'KEY_VALUE';
 }
 
+export type PipelineTrigger = 'ON_SUBMIT' | 'ON_APPROVED' | 'ON_REJECTED' | 'ON_STATUS_CHANGE';
+
+export interface PipeletDefinition {
+  code: string;
+  name: string;
+  description: string | null;
+  configSchema: Record<string, unknown> | null;
+  enabled: boolean;
+  available: boolean;
+}
+
+export interface PipelineDefinitionSummary {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  version: number;
+  status: string;
+  systemDefault: boolean;
+}
+
+export interface PipelineStepDefinition {
+  id: string;
+  stepOrder: number;
+  stepKey: string;
+  pipeletCode: string;
+  properties: Record<string, unknown> | null;
+}
+
+export interface PipelineDefinitionDetail {
+  definition: PipelineDefinitionSummary;
+  steps: PipelineStepDefinition[];
+}
+
+export interface PipelineStepRequest {
+  stepKey: string;
+  pipeletCode: string;
+  properties?: Record<string, unknown> | null;
+}
+
+export interface FormPipelineBinding {
+  id: string;
+  formVersionId: string;
+  pipelineDefinitionId: string;
+  trigger: PipelineTrigger;
+  enabled: boolean;
+}
+
+export interface UpsertPipelineBindingRequest {
+  pipelineId: string;
+  trigger: PipelineTrigger;
+  enabled: boolean;
+}
+
+export type PipelineJobType = 'REALTIME' | 'BATCH';
+
+export interface PipelineJob {
+  id: string;
+  code: string;
+  name: string;
+  jobType: PipelineJobType;
+  formVersionId: string | null;
+  pipelineId: string;
+  triggerEvent: string | null;
+  queryConfig: Record<string, unknown> | null;
+  scheduleCron: string | null;
+  enabled: boolean;
+  lastRunAt: string | null;
+}
+
+export interface CreatePipelineJobRequest {
+  code: string;
+  name: string;
+  jobType: PipelineJobType;
+  formVersionId?: string | null;
+  pipelineId: string;
+  triggerEvent?: string | null;
+  queryConfig?: Record<string, unknown> | null;
+  scheduleCron?: string | null;
+  enabled?: boolean;
+}
+
+export interface PipelineJobRun {
+  id: string;
+  jobDefinitionId: string;
+  status: string;
+  recordsProcessed: number;
+  errorMessage: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export type ServiceBindingScope = 'FORM' | 'PIPELINE' | 'PIPELET';
+
+export interface ServiceInstance {
+  id: string;
+  code: string;
+  name: string;
+  providerCode: string;
+  enabled: boolean;
+  config: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface ServiceBinding {
+  id: string;
+  instanceCode: string;
+  scope: ServiceBindingScope;
+  formVersionId: string | null;
+  pipelineDefinitionId: string | null;
+  pipelineStepId: string | null;
+  enabled: boolean;
+}
+
+export interface CreateServiceInstanceRequest {
+  code: string;
+  name: string;
+  providerCode: string;
+  config?: Record<string, unknown> | null;
+}
+
+export interface UpsertServiceBindingRequest {
+  instanceCode: string;
+  scope: ServiceBindingScope;
+  pipelineDefinitionId?: string | null;
+  pipelineStepId?: string | null;
+  enabled: boolean;
+}
+
+export interface ImportConfidence {
+  overall: number;
+  source: string;
+  fields: Record<string, Record<string, number>>;
+}
+
+export interface FormImportJob {
+  id: string;
+  status: 'PENDING' | 'EXTRACTING' | 'NEEDS_REVIEW' | 'ACCEPTED' | 'FAILED' | string;
+  sourceType: string | null;
+  providerCode: string | null;
+  fileName: string | null;
+  source: string | null;
+  suggestedName: string | null;
+  proposedSchema: FormSchema | null;
+  confidence: ImportConfidence | null;
+  error: string | null;
+  formId: string | null;
+  createdAt: string;
+}
+
+export interface ImportProvider {
+  code: string;
+  name: string;
+  sourceType: string;
+  enabled: boolean;
+  priority: number;
+  available: boolean;
+  config: Record<string, unknown> | null;
+}
+
+export interface UpdateImportProviderRequest {
+  enabled: boolean;
+  priority: number;
+  config?: Record<string, unknown> | null;
+}
+
+export interface NotificationProvider {
+  code: string;
+  name: string;
+  channelType: string;
+  enabled: boolean;
+  priority: number;
+  available: boolean;
+  config: Record<string, unknown> | null;
+}
+
+export interface UpdateNotificationProviderRequest {
+  enabled: boolean;
+  priority: number;
+  config?: Record<string, unknown> | null;
+}
+
+export interface NotificationTemplate {
+  eventType: string;
+  channelType: string;
+  locale: string;
+  subject: string | null;
+  body: string;
+}
+
+export interface DownstreamProvider {
+  code: string;
+  name: string;
+  connectorType: string;
+  enabled: boolean;
+  priority: number;
+  available: boolean;
+  config: Record<string, unknown> | null;
+}
+
+export interface UpdateDownstreamProviderRequest {
+  enabled: boolean;
+  priority: number;
+  config?: Record<string, unknown> | null;
+}
+
+export interface OutboxEvent {
+  id: string;
+  submissionId: string;
+  eventType: string;
+  formCode: string | null;
+  providerCode: string;
+  connectorType: string;
+  status: string;
+  attempts: number;
+  providerRef: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ServiceProvider {
+  code: string;
+  name: string;
+  adapterType: string;
+  enabled: boolean;
+  priority: number;
+  available: boolean;
+  config: Record<string, unknown> | null;
+}
+
+export interface UpdateServiceProviderRequest {
+  enabled: boolean;
+  priority: number;
+  config?: Record<string, unknown> | null;
+}
+
+export interface ServiceCallLog {
+  id: string;
+  submissionId: string;
+  providerCode: string;
+  adapterType: string;
+  operation: string;
+  formCode: string | null;
+  status: string;
+  providerRef: string | null;
+  error: string | null;
+  durationMs: number | null;
+  createdAt: string;
+}
+
+export interface AcceptedForm {
+  jobId: string;
+  formId: string;
+  versionId: string;
+}
+
+export interface AcceptImportRequest {
+  code: string;
+  name: string;
+  category?: string | null;
+  storageStrategy?: 'JSON_BLOB' | 'KEY_VALUE';
+  schema?: FormSchema | null;
+}
+
 export interface FormDetail extends FormSummary {
   formVersionId: string;
   schema: FormSchema;
@@ -152,10 +417,21 @@ export interface TransformedField {
   strategy: string;
 }
 
+export interface AiEvaluation {
+  evaluatorId: string;
+  model: string | null;
+  riskScore: number;
+  recommendation: string;
+  rationale: string | null;
+  signals: Record<string, unknown>;
+  evaluatedAt: string;
+}
+
 export interface PipelineReport {
   execution: PipelineExecution | null;
   sanitizedPayload: Record<string, Record<string, unknown>> | null;
   transformedFields: TransformedField[];
+  aiEvaluation: AiEvaluation | null;
 }
 
 export interface ApiClientConfig {
@@ -241,6 +517,65 @@ export function createApiClient(config: ApiClientConfig = {}) {
       request<AdminFormVersion>(`/api/admin/v1/forms/${formId}/versions/${versionId}/publish`, config, {
         method: 'POST',
       }),
+    uploadFormImport: (file: File) => {
+      const body = new FormData();
+      body.append('file', file);
+      // No Content-Type header — the browser sets the multipart boundary.
+      return request<FormImportJob>('/api/admin/v1/form-imports', config, { method: 'POST', body });
+    },
+    importFormFromUrl: (url: string) =>
+      request<FormImportJob>('/api/admin/v1/form-imports/from-url', config, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      }),
+    listFormImports: () => request<FormImportJob[]>('/api/admin/v1/form-imports', config),
+    getFormImport: (jobId: string) =>
+      request<FormImportJob>(`/api/admin/v1/form-imports/${jobId}`, config),
+    acceptFormImport: (jobId: string, body: AcceptImportRequest) =>
+      request<AcceptedForm>(`/api/admin/v1/form-imports/${jobId}/accept`, config, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    listImportProviders: () =>
+      request<ImportProvider[]>('/api/admin/v1/form-import-providers', config),
+    updateImportProvider: (code: string, body: UpdateImportProviderRequest) =>
+      request<ImportProvider>(`/api/admin/v1/form-import-providers/${encodeURIComponent(code)}`, config, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    listNotificationProviders: () =>
+      request<NotificationProvider[]>('/api/admin/v1/notification-providers', config),
+    updateNotificationProvider: (code: string, body: UpdateNotificationProviderRequest) =>
+      request<NotificationProvider>(`/api/admin/v1/notification-providers/${encodeURIComponent(code)}`, config, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    listNotificationTemplates: () =>
+      request<NotificationTemplate[]>('/api/admin/v1/notification-providers/templates', config),
+    listDownstreamProviders: () =>
+      request<DownstreamProvider[]>('/api/admin/v1/downstream-providers', config),
+    updateDownstreamProvider: (code: string, body: UpdateDownstreamProviderRequest) =>
+      request<DownstreamProvider>(`/api/admin/v1/downstream-providers/${encodeURIComponent(code)}`, config, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    listOutboxEvents: (submissionId: string) =>
+      request<OutboxEvent[]>(`/api/admin/v1/downstream-providers/outbox/${submissionId}`, config),
+    listServiceProviders: () =>
+      request<ServiceProvider[]>('/api/admin/v1/service-providers', config),
+    updateServiceProvider: (code: string, body: UpdateServiceProviderRequest) =>
+      request<ServiceProvider>(`/api/admin/v1/service-providers/${encodeURIComponent(code)}`, config, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    listServiceCalls: (submissionId: string) =>
+      request<ServiceCallLog[]>(`/api/admin/v1/service-providers/calls/${submissionId}`, config),
     listAdminSubmissions: () =>
       request<AdminSubmissionSummary[]>('/api/admin/v1/submissions', config),
     getAdminSubmission: (submissionId: string) =>
@@ -253,6 +588,71 @@ export function createApiClient(config: ApiClientConfig = {}) {
       }),
     getSubmissionPipeline: (submissionId: string) =>
       request<PipelineReport>(`/api/admin/v1/submissions/${submissionId}/pipeline`, config),
+    listPipelets: () => request<PipeletDefinition[]>('/api/admin/v1/pipelets', config),
+    listPipelines: () => request<PipelineDefinitionSummary[]>('/api/admin/v1/pipelines', config),
+    getPipeline: (pipelineId: string) =>
+      request<PipelineDefinitionDetail>(`/api/admin/v1/pipelines/${pipelineId}`, config),
+    updatePipelineSteps: (pipelineId: string, steps: PipelineStepRequest[]) =>
+      request<PipelineDefinitionDetail>(`/api/admin/v1/pipelines/${pipelineId}/steps`, config, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ steps }),
+      }),
+    listFormPipelineBindings: (formId: string, versionId: string) =>
+      request<FormPipelineBinding[]>(
+        `/api/admin/v1/forms/${formId}/versions/${versionId}/pipeline-bindings`,
+        config,
+      ),
+    upsertFormPipelineBinding: (formId: string, versionId: string, body: UpsertPipelineBindingRequest) =>
+      request<FormPipelineBinding>(
+        `/api/admin/v1/forms/${formId}/versions/${versionId}/pipeline-bindings`,
+        config,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      ),
+    listServiceInstances: () => request<ServiceInstance[]>('/api/admin/v1/service-instances', config),
+    createServiceInstance: (body: CreateServiceInstanceRequest) =>
+      request<ServiceInstance>('/api/admin/v1/service-instances', config, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    listFormServiceBindings: (formId: string, versionId: string) =>
+      request<ServiceBinding[]>(
+        `/api/admin/v1/forms/${formId}/versions/${versionId}/service-bindings`,
+        config,
+      ),
+    upsertFormServiceBinding: (formId: string, versionId: string, body: UpsertServiceBindingRequest) =>
+      request<ServiceBinding>(
+        `/api/admin/v1/forms/${formId}/versions/${versionId}/service-bindings`,
+        config,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      ),
+    listPipelineJobs: () => request<PipelineJob[]>('/api/admin/v1/pipeline-jobs', config),
+    listFormPipelineJobs: (formId: string, versionId: string) =>
+      request<PipelineJob[]>(
+        `/api/admin/v1/forms/${formId}/versions/${versionId}/pipeline-jobs`,
+        config,
+      ),
+    createPipelineJob: (body: CreatePipelineJobRequest) =>
+      request<PipelineJob>('/api/admin/v1/pipeline-jobs', config, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    triggerPipelineJob: (code: string, submissionId?: string) => {
+      const qs = submissionId ? `?submissionId=${encodeURIComponent(submissionId)}` : '';
+      return request<PipelineJobRun>(`/api/admin/v1/pipeline-jobs/${encodeURIComponent(code)}/trigger${qs}`, config, {
+        method: 'POST',
+      });
+    },
     getQuestionnaire: (code: string) =>
       request<QuestionnaireDetail>(`/api/consumer/v1/discovery/${encodeURIComponent(code)}`, config),
     evaluateDiscovery: (code: string, answers: Record<string, unknown>) =>
@@ -271,6 +671,10 @@ export function createApiClient(config: ApiClientConfig = {}) {
       }),
     getSubmission: (submissionId: string) =>
       request<SubmissionDetail>(`/api/consumer/v1/submissions/${submissionId}`, config),
+    discardSubmission: (submissionId: string) =>
+      request<void>(`/api/consumer/v1/submissions/${submissionId}`, config, {
+        method: 'DELETE',
+      }),
     saveSection: (
       submissionId: string,
       sectionKey: string,

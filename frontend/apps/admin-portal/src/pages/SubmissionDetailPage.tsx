@@ -3,6 +3,8 @@ import { Link, useParams } from 'react-router-dom';
 import type { FormFieldSchema, PipelineReport, ReviewActionKey, TimelineEvent } from '@banking-forms/api-client';
 import { Button, ErrorState, LoadingState, PageHeader } from '@banking-forms/ui';
 import { useAdminSubmission, useReviewSubmission, useSubmissionPipeline } from '../hooks/useAdminSubmissions';
+import { useOutboxEvents } from '../hooks/useDownstream';
+import { useServiceCalls } from '../hooks/useServiceProviders';
 import './admin-submissions.css';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -19,15 +21,33 @@ const STATUS_LABELS: Record<string, string> = {
 const EVENT_LABELS: Record<string, string> = {
   SUBMITTED: 'Application submitted',
   PIPELINE_STARTED: 'Automated pipeline started',
+  PIPELINE_QUEUED: 'Pipeline queued (async)',
+  PIPELINE_OUTBOX_FAILED: 'Pipeline outbox failed',
   VALIDATED: 'Validation passed',
   PII_SCRUBBED: 'PII scrubbed',
-  DOWNSTREAM_DISPATCHED: 'Dispatched downstream',
+  AI_EVALUATED: 'AI risk evaluation',
+  AI_EVALUATION_SKIPPED: 'AI evaluation skipped',
+  SERVICE_CALL_INVOKED: 'External services invoked',
+  SERVICE_CALL_COMPLETED: 'External services completed',
+  SERVICE_CALL_SUCCEEDED: 'External service succeeded',
+  SERVICE_CALL_FAILED: 'External service failed',
+  SERVICE_CALL_SKIPPED: 'External services skipped',
+  DOWNSTREAM_ENQUEUED: 'Downstream enqueued',
+  DOWNSTREAM_QUEUED: 'Downstream queued',
+  DOWNSTREAM_DISPATCHED: 'Downstream dispatched',
+  DOWNSTREAM_FAILED: 'Downstream failed',
+  DOWNSTREAM_SKIPPED: 'Downstream skipped',
   PIPELINE_COMPLETED: 'Automated pipeline completed',
   PIPELINE_FAILED: 'Automated pipeline failed',
   REVIEW_STARTED: 'Review started',
   APPROVED: 'Approved',
   REJECTED: 'Rejected',
   INFO_REQUESTED: 'More information requested',
+  NOTIFICATION_QUEUED: 'Notification queued',
+  NOTIFICATION_SENT: 'Notification sent',
+  NOTIFICATION_DELIVERED: 'Notification delivered',
+  NOTIFICATION_FAILED: 'Notification failed',
+  NOTIFICATION_SKIPPED: 'Notification skipped',
 };
 
 interface ReviewButton {
@@ -123,8 +143,46 @@ function pipelineBadgeClass(status: string) {
   return 'bf-badge bf-badge-warning';
 }
 
+function recommendationBadgeClass(recommendation: string) {
+  if (recommendation === 'APPROVE') return 'bf-badge bf-badge-success';
+  if (recommendation === 'REJECT') return 'bf-badge bf-badge-danger';
+  return 'bf-badge bf-badge-warning';
+}
+
+function AiEvaluationBlock({ ai }: { ai: NonNullable<PipelineReport['aiEvaluation']> }) {
+  const riskPct = Math.round(ai.riskScore * 100);
+  const signalEntries = Object.entries(ai.signals ?? {});
+  return (
+    <div className="submission-ai-eval">
+      <div className="submission-field-label">AI risk evaluation (advisory)</div>
+      <div className="submission-ai-eval-head">
+        <span className={recommendationBadgeClass(ai.recommendation)}>{ai.recommendation}</span>
+        <span className="submission-ai-eval-score">Risk {riskPct}%</span>
+        <span className="submission-ai-eval-meta">
+          {ai.evaluatorId}
+          {ai.model ? ` · ${ai.model}` : ''}
+        </span>
+      </div>
+      {ai.rationale ? <p className="submission-ai-eval-rationale">{ai.rationale}</p> : null}
+      {signalEntries.length > 0 ? (
+        <details className="submission-ai-eval-signals">
+          <summary>Signals</summary>
+          <ul className="submission-pipeline-list">
+            {signalEntries.map(([key, value]) => (
+              <li key={key}>
+                <code>{key}</code>
+                <span className="bf-badge">{String(value)}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 function PipelineCard({ report }: { report: PipelineReport }) {
-  const { execution, sanitizedPayload, transformedFields } = report;
+  const { execution, sanitizedPayload, transformedFields, aiEvaluation } = report;
   if (!execution) {
     return null;
   }
@@ -140,6 +198,8 @@ function PipelineCard({ report }: { report: PipelineReport }) {
       {execution.errorDetails ? (
         <p className="submission-pipeline-error">{execution.errorDetails}</p>
       ) : null}
+
+      {aiEvaluation ? <AiEvaluationBlock ai={aiEvaluation} /> : null}
 
       {transformedFields.length > 0 ? (
         <div className="submission-pipeline-transformed">
@@ -161,6 +221,74 @@ function PipelineCard({ report }: { report: PipelineReport }) {
           <pre>{JSON.stringify(sanitizedPayload, null, 2)}</pre>
         </details>
       ) : null}
+    </section>
+  );
+}
+
+function ServiceCallsBlock({ submissionId }: { submissionId: string }) {
+  const { data, isLoading } = useServiceCalls(submissionId);
+  if (isLoading || !data || data.length === 0) {
+    return null;
+  }
+  return (
+    <section className="submission-section-card">
+      <h2 className="submission-section-title">Service call log</h2>
+      <table className="bf-table">
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Duration</th>
+            <th>Ref / error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row) => (
+            <tr key={row.id}>
+              <td><code>{row.providerCode}</code></td>
+              <td>{row.adapterType}</td>
+              <td><span className="bf-badge">{row.status}</span></td>
+              <td>{row.durationMs != null ? `${row.durationMs}ms` : '—'}</td>
+              <td>{row.providerRef ?? row.error ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function OutboxBlock({ submissionId }: { submissionId: string }) {
+  const { data, isLoading } = useOutboxEvents(submissionId);
+  if (isLoading || !data || data.length === 0) {
+    return null;
+  }
+  return (
+    <section className="submission-section-card">
+      <h2 className="submission-section-title">Downstream outbox</h2>
+      <table className="bf-table">
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Attempts</th>
+            <th>Ref / error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row) => (
+            <tr key={row.id}>
+              <td><code>{row.providerCode}</code></td>
+              <td>{row.connectorType}</td>
+              <td><span className="bf-badge">{row.status}</span></td>
+              <td>{row.attempts}</td>
+              <td>{row.providerRef ?? row.error ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </section>
   );
 }
@@ -226,6 +354,10 @@ export function SubmissionDetailPage() {
       ) : null}
 
       {pipeline.data ? <PipelineCard report={pipeline.data} /> : null}
+
+      {id ? <ServiceCallsBlock submissionId={id} /> : null}
+
+      {id ? <OutboxBlock submissionId={id} /> : null}
 
       {data.schema.sections.map((section) => (
         <section key={section.key} className="submission-section-card">

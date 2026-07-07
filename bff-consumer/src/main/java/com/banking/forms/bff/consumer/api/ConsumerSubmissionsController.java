@@ -2,7 +2,7 @@ package com.banking.forms.bff.consumer.api;
 
 import com.banking.forms.discovery.application.DiscoveryService;
 import com.banking.forms.formdefinition.application.FormQueryService;
-import com.banking.forms.pipeline.application.SubmissionPipelineService;
+import com.banking.forms.pipeline.application.PipelineSubmitCoordinator;
 import com.banking.forms.submission.application.SubmissionDetailView;
 import com.banking.forms.submission.application.SubmissionNotFoundException;
 import com.banking.forms.submission.application.SubmissionService;
@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -35,17 +36,17 @@ public class ConsumerSubmissionsController {
     private final SubmissionService submissionService;
     private final FormQueryService formQueryService;
     private final DiscoveryService discoveryService;
-    private final SubmissionPipelineService pipelineService;
+    private final PipelineSubmitCoordinator pipelineSubmitCoordinator;
 
     public ConsumerSubmissionsController(
             SubmissionService submissionService,
             FormQueryService formQueryService,
             DiscoveryService discoveryService,
-            SubmissionPipelineService pipelineService) {
+            PipelineSubmitCoordinator pipelineSubmitCoordinator) {
         this.submissionService = submissionService;
         this.formQueryService = formQueryService;
         this.discoveryService = discoveryService;
-        this.pipelineService = pipelineService;
+        this.pipelineSubmitCoordinator = pipelineSubmitCoordinator;
     }
 
     @PostMapping
@@ -113,6 +114,22 @@ public class ConsumerSubmissionsController {
         }
     }
 
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> discardDraft(
+            @RequestHeader("X-Tenant-Id") UUID tenantId,
+            @RequestHeader(value = "X-Dev-User-Id", required = false) String userIdHeader,
+            @PathVariable("id") UUID id) {
+        UUID userId = DevRequestContext.resolveUserId(userIdHeader);
+        try {
+            submissionService.discardDraft(tenantId, id, userId);
+            return ResponseEntity.noContent().build();
+        } catch (SubmissionNotFoundException ex) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage());
+        } catch (SubmissionValidationException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
+    }
+
     @PostMapping("/{id}/submit")
     public ResponseEntity<SubmitResponse> submit(
             @RequestHeader("X-Tenant-Id") UUID tenantId,
@@ -120,9 +137,9 @@ public class ConsumerSubmissionsController {
             @PathVariable("id") UUID id) {
         try {
             submissionService.submit(tenantId, id, idempotencyKey);
-            // Run the automated pipeline (validate -> PII scrub -> downstream). It never throws;
-            // failures are recorded and leave the submission in a reviewable state.
-            pipelineService.process(tenantId, id);
+            // Async mode: pipeline runs off the request path via outbox + worker (returns SUBMITTED).
+            // Sync mode (pipeline.process-mode=sync): runs inline and returns post-pipeline status.
+            pipelineSubmitCoordinator.onSubmitted(tenantId, id);
             SubmissionDetailView detail = submissionService.getSubmission(tenantId, id);
             return ResponseEntity.accepted().body(new SubmitResponse(id, detail.status()));
         } catch (SubmissionNotFoundException ex) {

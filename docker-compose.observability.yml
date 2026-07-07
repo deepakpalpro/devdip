@@ -1,0 +1,5 @@
+# Observability-only convenience file (backward compatible).
+# Prefer: docker compose --profile observability up -d
+# Or:    ./scripts/docker-up.sh --obs
+include:
+  - docker-compose.yml

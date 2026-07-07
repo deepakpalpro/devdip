@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Button, EmptyState, ErrorState, LoadingState, PageHeader } from '@banking-forms/ui';
-import { useMySubmissions } from '../hooks/useSubmission';
+import { useDiscardSubmission, useMySubmissions } from '../hooks/useSubmission';
 import { isDraft, statusMeta } from '../lib/submissionStatus';
 import './applications.css';
 
@@ -14,6 +14,13 @@ function formatDate(value: string | null): string {
 
 export function MyApplicationsPage() {
   const { data, isLoading, error } = useMySubmissions();
+  const discard = useDiscardSubmission();
+
+  const handleDiscard = (id: string) => {
+    if (window.confirm('Discard this draft application? This cannot be undone.')) {
+      discard.mutate(id);
+    }
+  };
 
   if (isLoading) {
     return <LoadingState message="Loading your applications…" />;
@@ -55,9 +62,18 @@ export function MyApplicationsPage() {
                   <td className="bf-app-time">{formatDate(submission.submittedAt)}</td>
                   <td className="bf-app-actions">
                     {isDraft(submission.status) ? (
-                      <Link to={`/apply/${submission.formCode}?submission=${submission.id}`}>
-                        <Button>Continue</Button>
-                      </Link>
+                      <>
+                        <Link to={`/apply/${submission.formCode}?submission=${submission.id}`}>
+                          <Button>Continue</Button>
+                        </Link>
+                        <Button
+                          variant="secondary"
+                          onClick={() => handleDiscard(submission.id)}
+                          disabled={discard.isPending && discard.variables === submission.id}
+                        >
+                          {discard.isPending && discard.variables === submission.id ? 'Discarding…' : 'Discard'}
+                        </Button>
+                      </>
                     ) : (
                       <Link to={`/applications/${submission.id}`}>
                         <Button variant="secondary">View status</Button>

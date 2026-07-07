@@ -146,8 +146,11 @@ export function FormsListPage() {
                     )}
                   </td>
                   <td>
+                    <Link to={`/forms/${form.id}`}>
+                      <Button variant="secondary">Manage</Button>
+                    </Link>{' '}
                     <Link to={`/forms/${form.id}/builder`}>
-                      <Button variant="secondary">Open builder</Button>
+                      <Button variant="secondary">Builder</Button>
                     </Link>
                   </td>
                 </tr>

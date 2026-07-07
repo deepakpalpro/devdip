@@ -48,6 +48,11 @@ public class JsonBlobSectionStorage implements SectionStorageStrategy {
         return result;
     }
 
+    @Override
+    public void deleteSections(UUID submissionId) {
+        sectionRepository.deleteBySubmissionId(submissionId);
+    }
+
     private Map<String, Object> readJson(String json) {
         try {
             return objectMapper.readValue(json, new TypeReference<>() {});

@@ -169,7 +169,7 @@ Modules communicate via:
 - Legal transitions: `SUBMITTED → PENDING_REVIEW` (start review), `PENDING_REVIEW → APPROVED | REJECTED | NEEDS_INFO`, and `NEEDS_INFO → PENDING_REVIEW` (resume). Illegal transitions raise `ReviewException` (HTTP 409)
 - `ReviewService` loads the submission (tenant-scoped), applies the transition, persists the new status, and appends an audit event via the shared `SubmissionEventRecorder`
 - Reuses `SubmissionStatus` from `module-submission`; the full lifecycle enum also reserves `VALIDATING`/`PROCESSING` for the future automated pipeline
-- AI evaluation request/response contract (pluggable evaluator interface) — planned
+- AI evaluation request/response contract (pluggable `AiEvaluator` interface) — implemented as the pipeline `AI_EVALUATE` step (see §5.8, §9.6); the reviewer sees the advisory recommendation
 - Audit trail for every state transition, surfaced as a timeline in the admin portal
 
 #### `module-transformation`
@@ -179,20 +179,25 @@ Modules communicate via:
 - Output: sanitized payload for AI, analytics, and downstream — never mutates the source of record
 
 #### `module-service-integration`
-- Provider catalog (credit bureau, identity verification, tax residency API)
-- Adapter interface: `ServiceAdapter.execute(context, config) → ServiceResult`
-- Per-form overrides: which provider, credentials profile, timeout, retry policy
-- Circuit breaker (Resilience4j) per provider
+- **Service adapter registry (implemented)** — `ServiceAdapter` SPI + `service_provider` registry + `ServiceAdapterRouter`; invoked during pipeline SERVICE_CALL on the PII-scrubbed payload (see §5.8)
+- In-JVM default `log-service` + `rest-api` (JDK HttpClient); `credit-bureau` and `identity-verify` are configured-but-unavailable seams
+- Also hosts external SPI implementations: Ollama vision form-import, Ollama AI evaluator, WhatsApp Cloud notification channel
+- Every call logged to `service_call_log`; fail-safe — service errors never fail the pipeline
 
 #### `module-downstream`
-- Connector types: `EVENT_BUS`, `OBJECT_STORAGE`, `FILE_SYSTEM`, `REST_API_BATCH`, `REST_API_REALTIME`
-- Delivery guarantees: at-least-once with idempotent consumer design
-- Per-form routing rules (approved only, include attachments, schema version)
+- **Downstream connectors (implemented)** — pluggable delivery of the PII-scrubbed submission payload to external systems after pipeline processing (see §5.8)
+- `DownstreamConnector` SPI + `downstream_provider` registry + `DownstreamConnectorRouter` (priority-based fan-out to all enabled providers with an implementation)
+- Durable transactional outbox (`downstream_outbox`) written in the **same transaction** as the pipeline DOWNSTREAM step; async `@Scheduled` dispatcher with retries, backoff, and dead-lettering
+- In-JVM default `log-sink` (zero-setup, demoable) and `rest-webhook` (JDK `HttpClient` POST/PUT); `kafka-stream` and `s3-archive` are configured-but-unavailable seams until adapters land in `module-service-integration`
+- Advisory + fail-safe: downstream errors never affect the submission flow; every attempt is logged to the submission timeline (`DOWNSTREAM_QUEUED/DISPATCHED/FAILED/SKIPPED`)
 
 #### `module-notification`
-- Event-driven: `SubmissionSubmitted`, `StatusChanged`, `ReviewRequired`, `Approved`, `Rejected`
-- Channel adapters: email, SMS, push, in-app
-- Template engine (Thymeleaf / Handlebars) with localization
+- **Multi-channel customer notifications (implemented)** — event-driven on submission lifecycle transitions (submit + review decisions), with a configurable, data-driven provider registry mirroring form-import (see §5.11)
+- `NotificationChannel` SPI + `notification_provider` registry + `NotificationChannelRouter` (priority-based selection per logical channel); durable outbox (`notification_message`) drained by an async `@Scheduled` dispatcher with retries, backoff, and dead-lettering
+- In-JVM default `log-email` (zero-setup, demoable) and `smtp-email` (JavaMailSender) email channels; external `whatsapp-cloud` (Meta Cloud API) channel lives in `module-service-integration`
+- `RecipientResolver` derives email/phone/consent/locale from submission data; `TemplateRenderer` renders per (event, channel, locale) templates with `{{placeholder}}` substitution and built-in fallbacks
+- Advisory + fail-safe: notification errors never affect the submission/review flow; every attempt is logged to the submission timeline (`NOTIFICATION_QUEUED/SENT/DELIVERED/FAILED/SKIPPED`)
+- Delivery-status webhook endpoint (`/api/webhooks/notifications/{provider}`) updates messages to `DELIVERED`; consent enforcement gated by `notifications.require-consent`
 
 #### `module-pipeline`
 - **Automated processing pipeline (implemented)** — `SubmissionPipelineService` runs on submit: `VALIDATE → PII_SCRUB → DOWNSTREAM`, advancing the submission `SUBMITTED → VALIDATING → PROCESSING → PENDING_REVIEW` and recording each step in the submission timeline (see §5.8)
@@ -214,7 +219,8 @@ Modules communicate via:
 }
 ```
 
-- Planned: config-driven step executor registry, AI evaluation, service calls, dead-letter queue for failed steps
+- Implemented: `AI_EVALUATE` step (pluggable `AiEvaluator`, advisory + fail-safe — see §5.8, §9.6)
+- Planned: config-driven step executor registry, service calls, dead-letter queue for failed steps
 
 #### `module-analytics`
 - Publishes anonymized events to analytics topics
@@ -693,20 +699,23 @@ Any action attempted from a status not in its *allowed-from* set raises `ReviewE
 
 ---
 
-### 5.8 Automated Processing Pipeline (Validate → PII Scrub → Downstream)
+### 5.8 Automated Processing Pipeline (Validate → PII Scrub → AI Evaluate → Downstream)
 
-When a consumer submits, an **automated pipeline** runs before the application reaches a human reviewer. It advances the submission through the transient `VALIDATING`/`PROCESSING` states, produces a PII-sanitized copy for downstream consumers, and records every step in the same audit timeline used by manual review.
+When a consumer submits, an **automated pipeline** runs before the application reaches a human reviewer. It advances the submission through the transient `VALIDATING`/`PROCESSING` states, produces a PII-sanitized copy for downstream consumers, runs an **advisory AI risk evaluation** on that sanitized copy, and records every step in the same audit timeline used by manual review.
 
 **Flow (`SubmissionPipelineService.process`, one transaction):**
 
 ```
 POST /submissions/{id}/submit
    │  SubmissionService.submit()                     → status SUBMITTED, event SUBMITTED (tx commits)
-   ▼  SubmissionPipelineService.process()            (new tx; never throws)
+   ▼  (async) PipelineOutboxDispatcher picks up outbox_event → SubmissionPipelineService.process()
    ├─ PIPELINE_STARTED
    ├─ 1. VALIDATE     status→VALIDATING  re-run SectionValidator over stored data   → event VALIDATED
    ├─ 2. PII_SCRUB    status→PROCESSING  PiiScrubber → persist SanitizedPayload      → event PII_SCRUBBED
-   ├─ 3. DOWNSTREAM   (stub) dispatch sanitized payload to analytics stream          → event DOWNSTREAM_DISPATCHED
+   ├─ 3. AI_EVALUATE  AiEvaluatorRouter scores the sanitized payload (fail-safe)     → event AI_EVALUATED
+   ├─ 4. SERVICE_CALL ServiceCallExecutor invokes enabled external adapters (fail-safe) → event SERVICE_CALL_*
+   ├─ 5. DOWNSTREAM   DownstreamDispatchService enqueues sanitized payload to enabled connectors
+   │                  (transactional outbox → async dispatch)                              → event DOWNSTREAM_QUEUED
    └─ COMPLETE        status→PENDING_REVIEW                                          → event PIPELINE_COMPLETED
 ```
 
@@ -714,14 +723,16 @@ The consumer submit endpoint returns the **post-pipeline** status (typically `PE
 
 **PII scrubbing.** `PiiScrubber` (`module-transformation`) recursively walks the section map (including nested embedded-form data), applies the `PiiFieldRegistry`'s strategy per field, and returns a sanitized copy plus a `fieldPath → strategy` audit. Strategies: `MASK` (last-4), `HASH` (salted SHA-256, correlatable), `REDACT`, `REMOVE`, `NONE`. The result is stored in `submission_sanitized_payload` (one row per submission) — the raw source of record is never altered. Admins can inspect the run and the sanitized payload via `GET /submissions/{id}/pipeline`.
 
+**AI evaluation (advisory).** The `AI_EVALUATE` step runs on the **sanitized** payload only (PII always scrubbed first) and produces a risk score `[0,1]` + advisory recommendation (`APPROVE`/`REVIEW`/`REJECT`) + explainability `signals`, persisted to `submission_ai_evaluation` (one row per submission) and surfaced in the pipeline report + timeline (`AI_EVALUATED`). It is a **pluggable seam** — `AiEvaluator` implementations are Spring beans; `AiEvaluatorRouter` selects the active one via `pipeline.ai.evaluator` (default `heuristic`) and can disable the step entirely (`pipeline.ai.enabled=false`). The default `HeuristicAiEvaluator` (`module-pipeline`) is deterministic and dependency-free (completeness / high-value amount / missing-contact / risk-keyword signals); an optional `OllamaAiEvaluator` (`module-service-integration`) scores via a local Ollama text model. **AI never auto-decides** — the recommendation only assists the human reviewer, and the step is fail-safe (any evaluator error/timeout degrades to `REVIEW` and never fails the submission).
+
+**Downstream delivery.** The `DOWNSTREAM` step fans out the PII-scrubbed payload (plus optional AI risk metadata) to every **enabled** `downstream_provider` that has an in-JVM or service-integration implementation. `DownstreamDispatchService.enqueueForSubmission` writes one `downstream_outbox` row per provider (`PENDING`) in the **same transaction** as the pipeline advance — the outbox pattern guarantees delivery intent commits atomically with the submission state change. A `@Scheduled` `DownstreamDispatcher` later delivers each row via its connector (`log-sink` default, `rest-webhook` when configured); retries with linear backoff → dead-letter (`FAILED`). Timeline events: `DOWNSTREAM_QUEUED`, `DOWNSTREAM_DISPATCHED`, `DOWNSTREAM_FAILED`, `DOWNSTREAM_SKIPPED`. The step is **fail-safe** — downstream errors never fail the submit request.
+
 **Persistence & audit.** Overall run status/step/error is tracked in `pipeline_execution` (`RUNNING`/`COMPLETED`/`FAILED`); the per-step narrative lives in `submission_event` (actor = system UUID `0…0`), so both automated and manual actions share one chronological timeline in the admin UI.
 
 **Failure handling.** The pipeline **never fails the submit request**: any step exception is caught, the run is marked `FAILED` with `error_details`, a `PIPELINE_FAILED` event is recorded, and the submission is reverted to `SUBMITTED` (so an admin can still `start` a manual review). Since validation already ran at submit time, the VALIDATE step is defense-in-depth and rarely fails.
 
 **Trade-offs / boundaries.**
-- The pipeline currently runs **synchronously** in the submit request (no message broker yet). The `outbox_event` table and a future `@TransactionalEventListener`/broker would move this off the request path; the step contract and audit events stay the same.
-- Steps are **hard-coded** (`VALIDATE, PII_SCRUB, DOWNSTREAM`) rather than driven by `pipeline_config`; `PipelineStepType` already enumerates the fuller catalog (AI_EVALUATE, SERVICE_CALL, NOTIFY) for that evolution.
-- `DOWNSTREAM` is a stub (records an event) — real connectors live in `module-downstream`.
+- The pipeline **enqueue** is async by default: submit returns `SUBMITTED` and a `PIPELINE_REQUESTED` row is written to the generic `outbox_event` table; `PipelineOutboxDispatcher` runs the worker off the request path (~3s poll). Set `pipeline.process-mode=sync` to restore inline processing. Downstream **delivery** remains async via `downstream_outbox`. Kafka broker fan-out is a future seam (`PipelineEventPublisher` SPI).
 
 ---
 
@@ -758,6 +769,116 @@ GET /submissions/{id}
 - Draft data is stored **unencrypted-at-field-level for `JSON_BLOB` forms** just like final data; regulated forms use `KEY_VALUE` where field-level encryption applies equally to drafts.
 - Progress is a single "furthest/last section" pointer, not a full per-field autosave journal — saves happen on page transitions, not on every keystroke. Continuous autosave (debounced) is a straightforward future enhancement using the same endpoint.
 - Because required validation is deferred to submit, drafts can contain incomplete/technically-invalid sections by design; downstream code must treat `DRAFT` data as provisional.
+
+---
+
+### 5.10 Form Import (Multi-Source, Configurable Providers, Human-in-the-Loop)
+
+Authoring a form by hand is slow when the bank already has the form as a PDF, spreadsheet, web page, or scanned image. The **Form Import** pipeline (`module-form-import`) ingests such an artifact, extracts a candidate schema, and hands it to an admin to review and accept — at which point a normal `DRAFT` form is created in `module-form-definition`. **Extraction output is always a proposal; nothing is published automatically.**
+
+**Design goals**
+- Support many source types (PDF, CSV, XLS/XLSX, HTML, URL, image) behind one stable contract.
+- Let ops add/replace/tune extractors — including AI/vision — **without code changes**, driven by database configuration.
+- Keep AI *assistive*: a human reviews and edits before anything becomes a form.
+
+**Provider SPI (`spi/`).** Extraction is a single interface so every source type is handled uniformly:
+
+```java
+public interface FormExtractor {
+    String code();                                             // stable provider id, e.g. "pdfbox", "ollama-vision"
+    ExtractedForm extract(FormImportSource source, ProviderConfig config);
+}
+```
+- `FormImportSource` — neutral input (`sourceType`, `content` bytes, `url`, `fileName`, `contentType`).
+- `ProviderConfig` — typed accessors over the provider's `config_json`; `secret(key)` resolves secrets from environment variables via a `secretRef` (so API keys are never stored in the DB).
+- `SourceTypes` — canonical tokens (`PDF`, `CSV`, `SPREADSHEET`, `HTML`, `IMAGE`).
+- `ExtractedForm` / `ExtractedField` / `FieldKind` — neutral extraction result, independent of any provider or the form-definition schema.
+
+**Configurable provider registry.** The `form_import_provider` table (migration `V11`) is the source of truth for *which extractor handles what*:
+
+| Column | Meaning |
+|--------|---------|
+| `code` | matches a `FormExtractor.code()` bean |
+| `source_type` | which `SourceTypes` token this provider serves |
+| `enabled` | on/off without redeploy |
+| `priority` | lower wins when several providers serve one source type |
+| `config_json` | provider-specific config (endpoint, model, prompt, timeouts, `secretRef`, …) |
+
+Seeded providers: `pdfbox`, `csv`, `poi-spreadsheet`, `jsoup-html` (enabled); `ollama-vision`, `llm-vision` (disabled by default). Admins manage all of this from the **Settings → Import Providers** page (`GET/PUT /api/admin/v1/form-import-providers`).
+
+**Routing.** `FormExtractorRouter.resolve(sourceType)` reads the registry, orders enabled providers for that source type by `priority`, and returns the first one **whose implementation bean actually exists** (`hasImplementation(code)`). This decouples *configuration* from *availability*: a provider can be seeded/enabled in the DB even if its bean isn't deployed (e.g. the hosted-LLM `llm-vision` seam), and the router simply skips it. Adding a new source/provider = drop in a `FormExtractor` bean + a `form_import_provider` row; the service and controllers are untouched.
+
+**In-JVM extractors (`module-form-import/infrastructure`)** — zero external dependencies, the default path:
+- `PdfBoxFormExtractor` (`pdfbox`) — Apache PDFBox; reads AcroForm fields, falls back to a text/label heuristic.
+- `CsvFormExtractor` (`csv`) — header row → fields.
+- `SpreadsheetFormExtractor` (`poi-spreadsheet`) — Apache POI; header row of XLS/XLSX.
+- `HtmlFormExtractor` (`jsoup-html`) — jsoup parses `<form>` controls + `<label>`s (radios expand to option values); fetches remote pages via JDK `HttpClient` for the URL source.
+
+**AI/vision extractors (`module-service-integration`)** — external implementations of the same SPI (this module depends on `module-form-import` for the SPI only):
+- `OllamaVisionFormExtractor` (`ollama-vision`) — base64-encodes the image, downscales it to `maxImageDimension`, and calls a **local Ollama** `/api/generate` (default model `llava`) with a prompt that requests a strict JSON schema; parses the reply into `ExtractedForm`. Inference is on-device (no data egress). Config (`endpoint`, `model`, `prompt`, `timeoutSeconds`, `maxImageDimension`) lives in `config_json`.
+- `LlmVisionFormExtractor` (`llm-vision`) — generic hosted-LLM seam, disabled by default; throws until wired to a concrete provider (uses `secretRef` for the API key).
+
+**Lifecycle (`FormImportStatus`).**
+
+```
+POST /form-imports (file)  |  POST /form-imports/from-url (url)
+   │  detect sourceType (filename/MIME/URL) → create job (SHA-256 hash for dedup)
+   ▼  PENDING
+   │  FormImportService: router.resolve(sourceType) → extractor.extract(...) → SchemaMapper
+   ▼  EXTRACTING → NEEDS_REVIEW   (mapped form schema + confidence signal + sourceType/providerCode)
+   │
+   │  admin reviews / edits in the Import page
+   └── POST /form-imports/{id}/accept → create DRAFT form (module-form-definition) → ACCEPTED
+   (extraction error → FAILED, with details)
+```
+
+**Module boundaries & data.**
+- `module-form-import` owns the SPI, the in-JVM extractors, `FormImportService`, `FormExtractorRouter`, `SchemaMapper`, `SourceTypeDetector`, `ProviderSettingsService`, and the `form_import_job` + `form_import_provider` tables (migrations `V10`/`V11`).
+- `module-service-integration` hosts the AI/vision providers and depends only on the SPI.
+- `bff-admin` exposes `AdminFormImportController` (`/form-imports…`: upload, from-url, list, get, accept) and `AdminFormImportProviderController` (`/form-import-providers`).
+- Accept delegates to `FormCommandService` — imported forms enter the *same* draft→publish authoring flow as hand-built forms.
+
+**Trade-offs / boundaries.**
+- Extraction quality varies by source and (for vision) by model; the mandatory human review step is the quality gate.
+- Local Ollama is an external runtime (run via Docker) and CPU inference of `llava` is slow — hence image downscaling and generous, configurable timeouts; the in-JVM parsers remain the zero-setup default.
+- Secrets for hosted providers are resolved from the environment via `secretRef`, never persisted in `config_json`.
+
+*(This realizes the adapter-registry / configuration-model pattern sketched in §11 for the form-import use case.)*
+
+---
+
+### 5.11 Customer Notifications (Multi-Channel, Configurable Providers, Outbox)
+
+Customers are notified on the transitions that matter to them — **application received** (submit) and each **review decision** (approved / rejected / more-info) — over email and/or WhatsApp. The design reuses the platform's pluggable-provider pattern (as in form-import and AI evaluation): channels are data-driven, advisory, and fail-safe.
+
+**Trigger (decoupled).** `SubmissionService.submit` and `ReviewService.decide` publish a `SubmissionLifecycleEvent` via Spring's `ApplicationEventPublisher`. The submission module knows nothing about notifications — it just announces a domain fact. `module-notification` subscribes with a `@TransactionalEventListener(AFTER_COMMIT)`, so a customer is only ever contacted once the transition has durably committed.
+
+**Fan-out + outbox.** On an eligible transition, `NotificationService` resolves the recipient, and for each eligible logical channel (email if an address is present, WhatsApp if a phone is present) enqueues one `notification_message` row (`PENDING`) — the durable outbox. `NotificationChannelRouter` selects the highest-priority **enabled** `notification_provider` whose `code` matches an available `NotificationChannel` bean.
+
+**Async delivery.** `NotificationDispatcher` (`@Scheduled`) drains `PENDING` messages, dispatching each in its own transaction via `NotificationService.dispatch`. On success → `SENT`; on failure → retry with linear backoff up to `notifications.max-attempts`, then dead-letter to `FAILED`. This gives async processing, retries, and DLQ semantics without a broker; swapping the poll for a broker consumer later is a localized change.
+
+```
+submit / review decision
+   → SubmissionLifecycleEvent (AFTER_COMMIT)
+      → resolve recipient (email/phone/consent/locale from submission data)
+      → per channel: render template → enqueue notification_message (PENDING)
+   → @Scheduled dispatcher: send → SENT | retry(backoff) | FAILED(DLQ)
+   → provider webhook (optional) → DELIVERED
+```
+
+**Channels (data-driven registry).**
+
+| Provider `code` | Channel | Where | Default | Notes |
+|---|---|---|---|---|
+| `log-email` | email | `module-notification` (in-JVM) | **enabled** | Renders to the log; zero setup, demoable/testable |
+| `smtp-email` | email | `module-notification` (JavaMailSender) | disabled | Needs `spring.mail.*` / an SMTP host (e.g. Mailpit) |
+| `whatsapp-cloud` | whatsapp | `module-service-integration` (Meta Cloud API) | disabled | Needs `endpoint` + `phoneNumberId` + `secretRef`; uses approved **templates** outside the 24h window |
+
+**Templates & recipients.** `notification_template` rows are keyed by (event, channel, locale) with `{{placeholder}}` substitution (`formName`, `reference`, `status`), falling back to `en` then a built-in default. `RecipientResolver` derives contact points heuristically from submission field names (`email`, `phone/mobile`, `consent/optin`, `locale/language`) — form-agnostic, mirroring the AI evaluator.
+
+**Cross-cutting.** Recipients are masked (`ja***@example.com`) in logs, admin views, and timeline events; secrets come from the environment via `secretRef`; consent is enforced when `notifications.require-consent=true`; a webhook endpoint (`/api/webhooks/notifications/{provider}`) applies provider delivery-status callbacks (→ `DELIVERED`). Every step lands on the submission timeline, and no notification failure can break the submission or review flow.
+
+**Admin.** Providers are managed from the admin Settings → *Notifications* page (enable/disable, priority, JSON config), exactly like import providers; templates are listed read-only.
 
 ---
 
@@ -1010,6 +1131,17 @@ public record AiEvaluationResult(
 - Output schema validation (JSON Schema)
 - Fallback: `recommendation = REVIEW` on timeout or invalid response
 - Model version pinned in pipeline config for audit reproducibility
+
+### 9.6 Current Implementation (AI_EVALUATE step)
+The `AiEvaluator` seam is **implemented** and wired into the pipeline as the `AI_EVALUATE` step (§5.8):
+- **SPI** (`module-pipeline` `spi/`): `AiEvaluator` (`evaluatorId()` + `evaluate(AiEvaluationContext)`), `AiEvaluationContext` (submissionId, formCode, sanitized data, metadata), `AiEvaluationResult` (riskScore `[0,1]`, `AiRecommendation`, rationale, signals, processingTimeMs). Slightly tightened vs the §9.2 sketch (typed enum recommendation, normalised risk score).
+- **Selection & fail-safe**: `AiEvaluatorRouter` picks the bean named by `pipeline.ai.evaluator` (default `heuristic`), honours `pipeline.ai.enabled`, and guarantees the guardrail fallback (`REVIEW`) on any exception/null/absent evaluator.
+- **Default provider**: `HeuristicAiEvaluator` — deterministic, no external calls (the "mock/dev evaluator" of §9.4, made useful).
+- **External provider**: `OllamaAiEvaluator` (`module-service-integration`) — local Ollama text model (`llama3.2` by default), opt-in via `pipeline.ai.evaluator=ollama`.
+- **Persistence**: latest result per submission in `submission_ai_evaluation` (migration `V12`), exposed in the pipeline report and audit timeline.
+- **Human-in-the-loop**: advisory only — never changes the submission's terminal status (§9.1).
+
+*Not yet done (future):* per-form prompt templates, async/batch modes, hosted providers (OpenAI/Bedrock), and `pipeline_config`-driven step ordering.
 
 ---
 
@@ -1288,23 +1420,26 @@ flowchart TB
 - [ ] Form renderer + section-wise submission
 - [ ] Draft persistence + final submit
 
-### Phase 3 — Processing Pipeline (Weeks 9–12)
-- [ ] Event framework + outbox pattern
-- [ ] Pipeline orchestrator (validate, notify)
-- [ ] Status management + admin review queue
-- [ ] Notification module
+### Phase 3 — Processing Pipeline & Integrations (Weeks 9–12) ✅
+- [x] Event framework + outbox pattern
+- [x] Pipeline orchestrator (validate, PII scrub, AI evaluate, service call, downstream)
+- [x] Status management + admin review queue
+- [x] Notification module (multi-channel email/WhatsApp, configurable providers, outbox + async dispatch)
+- [x] Downstream connectors (log + REST, transactional outbox)
+- [x] Service-integration adapters (log + REST)
+- [x] Form import (multi-source + Ollama vision)
+- [x] AI evaluation step (heuristic + optional Ollama)
 
-### Phase 4 — Advanced Integrations (Weeks 13–16)
-- [ ] PII scrubbing pipeline
-- [ ] AI evaluator interface + mock adapter
-- [ ] Service integration layer
-- [ ] Downstream connectors (Kafka, S3, REST)
+### Phase 4 — Observability & Hardening (Weeks 13–16) ✅
+- [x] Metrics, structured logging, Prometheus/Grafana dashboards
+- [x] Analytics export (sanitized payloads)
+- [x] Load-test baseline + OWASP dependency scanning
+- [x] Documentation + runbooks (TECHNICAL_GUIDE, scripts)
 
-### Phase 5 — Observability & Hardening (Weeks 17–20)
-- [ ] Metrics, tracing, dashboards
-- [ ] Analytics export
-- [ ] Security audit, load testing
-- [ ] Documentation + runbooks
+### Phase 5 — Production Auth (final) ⏳
+- [ ] OIDC authentication & RBAC (US-9.1)
+- [ ] Visual drag-and-drop form builder (optional — US-2.5)
+- [ ] Kafka/S3 downstream adapters (future seams)
 
 ---
 
