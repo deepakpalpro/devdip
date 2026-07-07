@@ -119,6 +119,81 @@ export interface UpsertPipelineBindingRequest {
   enabled: boolean;
 }
 
+export type PipelineJobType = 'REALTIME' | 'BATCH';
+
+export interface PipelineJob {
+  id: string;
+  code: string;
+  name: string;
+  jobType: PipelineJobType;
+  formVersionId: string | null;
+  pipelineId: string;
+  triggerEvent: string | null;
+  queryConfig: Record<string, unknown> | null;
+  scheduleCron: string | null;
+  enabled: boolean;
+  lastRunAt: string | null;
+}
+
+export interface CreatePipelineJobRequest {
+  code: string;
+  name: string;
+  jobType: PipelineJobType;
+  formVersionId?: string | null;
+  pipelineId: string;
+  triggerEvent?: string | null;
+  queryConfig?: Record<string, unknown> | null;
+  scheduleCron?: string | null;
+  enabled?: boolean;
+}
+
+export interface PipelineJobRun {
+  id: string;
+  jobDefinitionId: string;
+  status: string;
+  recordsProcessed: number;
+  errorMessage: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export type ServiceBindingScope = 'FORM' | 'PIPELINE' | 'PIPELET';
+
+export interface ServiceInstance {
+  id: string;
+  code: string;
+  name: string;
+  providerCode: string;
+  enabled: boolean;
+  config: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface ServiceBinding {
+  id: string;
+  instanceCode: string;
+  scope: ServiceBindingScope;
+  formVersionId: string | null;
+  pipelineDefinitionId: string | null;
+  pipelineStepId: string | null;
+  enabled: boolean;
+}
+
+export interface CreateServiceInstanceRequest {
+  code: string;
+  name: string;
+  providerCode: string;
+  config?: Record<string, unknown> | null;
+}
+
+export interface UpsertServiceBindingRequest {
+  instanceCode: string;
+  scope: ServiceBindingScope;
+  pipelineDefinitionId?: string | null;
+  pipelineStepId?: string | null;
+  enabled: boolean;
+}
+
 export interface ImportConfidence {
   overall: number;
   source: string;
@@ -538,6 +613,46 @@ export function createApiClient(config: ApiClientConfig = {}) {
           body: JSON.stringify(body),
         },
       ),
+    listServiceInstances: () => request<ServiceInstance[]>('/api/admin/v1/service-instances', config),
+    createServiceInstance: (body: CreateServiceInstanceRequest) =>
+      request<ServiceInstance>('/api/admin/v1/service-instances', config, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    listFormServiceBindings: (formId: string, versionId: string) =>
+      request<ServiceBinding[]>(
+        `/api/admin/v1/forms/${formId}/versions/${versionId}/service-bindings`,
+        config,
+      ),
+    upsertFormServiceBinding: (formId: string, versionId: string, body: UpsertServiceBindingRequest) =>
+      request<ServiceBinding>(
+        `/api/admin/v1/forms/${formId}/versions/${versionId}/service-bindings`,
+        config,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      ),
+    listPipelineJobs: () => request<PipelineJob[]>('/api/admin/v1/pipeline-jobs', config),
+    listFormPipelineJobs: (formId: string, versionId: string) =>
+      request<PipelineJob[]>(
+        `/api/admin/v1/forms/${formId}/versions/${versionId}/pipeline-jobs`,
+        config,
+      ),
+    createPipelineJob: (body: CreatePipelineJobRequest) =>
+      request<PipelineJob>('/api/admin/v1/pipeline-jobs', config, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    triggerPipelineJob: (code: string, submissionId?: string) => {
+      const qs = submissionId ? `?submissionId=${encodeURIComponent(submissionId)}` : '';
+      return request<PipelineJobRun>(`/api/admin/v1/pipeline-jobs/${encodeURIComponent(code)}/trigger${qs}`, config, {
+        method: 'POST',
+      });
+    },
     getQuestionnaire: (code: string) =>
       request<QuestionnaireDetail>(`/api/consumer/v1/discovery/${encodeURIComponent(code)}`, config),
     evaluateDiscovery: (code: string, answers: Record<string, unknown>) =>

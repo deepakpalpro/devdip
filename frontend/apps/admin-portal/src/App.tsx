@@ -1,8 +1,8 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
 import { AppShell, PageHeader } from '@banking-forms/ui';
 import { FormsListPage } from './pages/FormsListPage';
+import { FormHubPage, FormPipelineRedirect } from './pages/FormHubPage';
 import { FormBuilderPage } from './pages/FormBuilderPage';
-import { FormPipelinePage } from './pages/FormPipelinePage';
 import { FormImportPage } from './pages/FormImportPage';
 import { ImportProvidersPage } from './pages/ImportProvidersPage';
 import { NotificationProvidersPage } from './pages/NotificationProvidersPage';
@@ -57,17 +57,18 @@ export function App() {
         />
         <Route path="/forms/:formId/builder" element={<FormBuilderPage />} />
         <Route
-          path="/forms/:formId/pipeline"
+          path="/forms/:formId"
           element={
             <>
               <PageHeader
-                title="Form pipeline"
-                description="Bind a configurable pipelet pipeline to this form version and set trigger events."
+                title="Form operations"
+                description="Submissions, pipeline, services, jobs, and downstream connectors for this form."
               />
-              <FormPipelinePage />
+              <FormHubPage />
             </>
           }
         />
+        <Route path="/forms/:formId/pipeline" element={<FormPipelineRedirect />} />
         <Route
           path="/import"
           element={
